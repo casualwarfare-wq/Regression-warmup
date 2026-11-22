@@ -2,6 +2,7 @@ from poly import placement, make_poly_data, build_pipelines, add_noise_floor, cv
 import poly
 import numpy as np
 from sklearn.model_selection import validation_curve, ValidationCurveDisplay, KFold, train_test_split
+from sklearn.base import clone
 import argparse
 import matplotlib.pyplot as plt
 
@@ -20,7 +21,9 @@ noise=args.noise
 true_coefs= np.array([8,6,4,0.3])
 X, y = make_poly_data(n=500, x_low=0, x_high=20, true_coefs=true_coefs, seed=poly_seed, noise=noise)
 X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=0.8, random_state=train_test_seed)
+
 scale_afterpoly = build_pipelines(9)["scale_afterpoly"]
+
 scale_afterpoly.set_params(ridge__alpha=alpha)
 splitter = KFold(5,shuffle=True, random_state=42)
 variances,cond_num, off_diag_corr  = placement(scale_afterpoly,X_train, y_train)
@@ -64,4 +67,5 @@ ss_index = np.argmin(s_train_cv_rmse - s_validation_cv_rmse)
 print(f"Smallest Error for Large Dataset: {smallest} Degree: {s_index+1} Small Dataset: {smallest_small} Degree: {ss_index+1}")
 print(f"Degree 9 Train CV_RMSE for Large Dataset: {abs(train_cv_rmse[8])} Small Dataset: {abs(s_train_cv_rmse[8])}")
 print(f"Degree 9 CV_RMSE for Large Dataset: {abs(validation_cv_rmse[8])} Small Dataset: {abs(s_validation_cv_rmse[8])}")
+print(f'Variance for Large Dataset at Degree=9: {variances[8]} Small Dataset: {small_variances[8]}')
 plt.show()

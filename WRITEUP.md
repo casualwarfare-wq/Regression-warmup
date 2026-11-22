@@ -81,6 +81,15 @@ Scale_afterpoly has won again this time with a mean_cv_rmse of 200.55 and 18 win
 (Validation curves from Intial experiment seed 42):
 The base models cv_rmses are the furtherest from zero with them having the largest error bars compared to the other models. In the big dataset pipelines up to alpha = 10, with each having about a 2-6 point rmse gap between train and validation scores, the validation scores are very close to the train scores so they're well fitted. Past alpha= 10 the pipelines start to underfit with both the train and validation scores dropping off massively. In small dataset scale first there seems to be a maximum around alpha=0.01 but below and above that the positive rmse would be above the noise floor (above 144.98) with about a 25 point rmse gap between train and validations scores, then past alpha =1, with around a 40-62 point rmse gap between train and validation scores, it starts underfitting with the train and validations scores falling off. The small dataset scale_afterpoly seems to have a smoother validation score curve and the lowest rmse gap of the small dataset pipelines across alphas. In the small dataset scale both there seems to be a maximum around alpha = 0.001, with around a 15 point rmse gap, but past that the positive Rmse goes above the noise floor (above 144.98). At around alpha = 6, with about a 21 point rmse gap, it starts to underfit with the train and test scores falling off massively. In the dataset pipeline overlay for figure 2, scale after poly overall had the highest curve and it matches with the seed runs because it had the lowest mean cv_rmse. In the small dataset pipelines the error bar is massive so there isn't a clear winner but the seed runs show that scale after poly does the best overall since it had the lowest mean cv rmse. 
 
+
+## Prediction for degree sweep
+The smallest error for large dataset is 1.4376679756444446 at Degree 2 and for the smallest dataset it's 13.320284456360781 at degree 2. The degree 9 Train RMSE is 204.50620727035886 for large dataset and 132.77085086682936 for small dataset. The Degree 9 CV_RMSE is 208.42336021285723 for large dataset and 152.4052471164458 for small dataset. The large dataset differs from the small dataset by the train set floor since for the large dataset it's 206.32 and for the small dataset it's 144.98. 
+
+
+
+
+
+
 ## Conclusion:
 | Dataset | Pipeline | Variances(degrees 1-9) | Condition | Max Off-diag Correlation |
 |---|---|---|---:|---:|
