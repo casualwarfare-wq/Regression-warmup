@@ -1,18 +1,20 @@
-from poly import make_poly_data, cv_rmse_per_fold
-import poly
+from src.poly import make_poly_data, cv_rmse_per_fold
+import src.poly
 import numpy as np
 from sklearn.model_selection import KFold, train_test_split
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.base import clone
 from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
+from numpy.polynomial.polynomial import polyval
 
-
-def Train_CV_ratio_predictions(table, model, true_coefs: np.ndarray, splitter) -> tuple[list,list,list]:
+def Train_CV_Ratio_Predictions(table, model, true_coefs: np.ndarray, splitter) -> tuple[list,list,list]:
     """
     Gives the Train to floor Ratio and the CV to floor Ratio.
     Parameters:
-        Table: list of tuples with X input matrix, y output matrix and sigma (noise floor) as the values.
+        Table: list of tuples with X input matrix, y output matrix, degree and sigma (noise floor) as the values. Contract: If 
+        sigma is zero then it will raise a zero divison Error. If sigma is negative it will be assumed to come sklearn string scoring arguments
+        (e.g neg_root_mean_squared_error) and therefore will take the absolute value
         model: the model used for predictions and to get residuals 
         true_coefs: Array of true coefs for the matrix
         splitter: used the split the data 
@@ -21,15 +23,21 @@ def Train_CV_ratio_predictions(table, model, true_coefs: np.ndarray, splitter) -
     
     """ 
     x_dense = np.linspace(0, 20, 10_001).reshape(-1, 1)
-    y_dense = poly.polyval(x_dense.ravel(), true_coefs)
+    y_dense = polyval(x_dense.ravel(), true_coefs)
     train_ratios = []
     cv_ratios = []
     train_cv_ratios = []
-    for dataset, X_fit, y_fit, degree, sigma in table:
+    for X_fit, y_fit, degree, sigma in table:
+        if sigma < 0:
+            sigma = abs(sigma)
+        elif sigma == 0:
+            raise ZeroDivisionError("Sigma can't be zero.")
         n_fold_train = len(next(splitter.split(X_fit, y_fit))[0])
         p = degree + 1
+        if p >= n_fold_train:
+            raise ValueError("Polynomial parameter count must be smaller than the fold training size.")
 
-        if degree < 3:
+        if degree < len(true_coefs)-1:
             bias_model = clone(model).set_params(poly__degree=degree)
             bias_model.fit(x_dense, y_dense)
             bias = np.sqrt(np.mean((y_dense - bias_model.predict(x_dense)) ** 2))
@@ -65,12 +73,19 @@ if __name__ == "__main__":
     )
 
 
-    ratios = Train_CV_ratio_predictions([
-            ("small", X_2_train, y_2_train, 1, small_floor),
-            ("small", X_2_train, y_2_train, 3, small_floor),
-            ("small", X_2_train, y_2_train, 12, small_floor),
-            ("large", X_train, y_train, 9, big_floor),
+    ratios = Train_CV_Ratio_Predictions([
+            ( X_2_train, y_2_train, 1, small_floor),
+            ( X_2_train, y_2_train, 3, small_floor),
+            ( X_2_train, y_2_train, 12, small_floor),
+            ( X_train, y_train, 9, big_floor),
         ], LS, true_coefs, splitter)
-    print(ratios[2])
+    print("Train Ratios: ", ratios[0])
+    print("CV Ratios:", ratios[1])
+    print("CV-Train Ratios:", ratios[2])
+    scale_afterpoly = poly.build_pipelines(12)['scale_afterpoly']
+    ridge_ratio = Train_CV_Ratio_Predictions([(X_train, y_train, 12, big_floor), (X_2_train, y_2_train, 12, small_floor)], scale_afterpoly, true_coefs, splitter)
+    print(f"Big Ridge Ratios Train: {ridge_ratio[0][0]} CV: {ridge_ratio[1][0]} CV-Train: {ridge_ratio[2][0]}")
+    print(f"Small Ridge Ratios Train: {ridge_ratio[0][1]} CV: {ridge_ratio[1][1]} CV-Train: {ridge_ratio[2][1]}")
+
 
 
