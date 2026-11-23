@@ -11,9 +11,8 @@ from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.model_selection import KFold, train_test_split, validation_curve
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import PolynomialFeatures, StandardScaler
-
-from poly import build_pipelines, cv_rmse_per_fold, make_poly_data, placement
-import poly
+from numpy.polynomial.polynomial import polyval
+from poly import build_pipelines, make_poly_data, placement
 
 
 def generate_seed_triplets(master_seed: int, n_replicates: int) -> list[tuple[int, int, int]]:
@@ -27,6 +26,9 @@ def generate_seed_triplets(master_seed: int, n_replicates: int) -> list[tuple[in
     Returns:
         list[tuple[int, int, int]]: Per-replicate train/test, splitter, and data
             seeds, in that order.
+
+    Raises:
+        ValueError: If n_replicates is negative.
     """
     seed_sequences = np.random.SeedSequence(master_seed).spawn(n_replicates)
     return [
@@ -169,10 +171,29 @@ def curve_scores(curve: tuple[np.ndarray, np.ndarray]) -> tuple[np.ndarray, np.n
             validation_curve, each shaped (parameter values, folds).
 
     Returns:
-        tuple[np.ndarray, np.ndarray]: Mean training and validation scores.
-            Score signs are preserved.
+        tuple[np.ndarray, np.ndarray]: Positive mean training and validation
+            RMSE values.
     """
-    return np.mean(curve[0], axis=1), np.mean(curve[1], axis=1)
+    return -np.mean(curve[0], axis=1), -np.mean(curve[1], axis=1)
+
+
+def mean_fold_rmse(residuals: np.ndarray, folds: list[tuple[np.ndarray, np.ndarray]]) -> float:
+    """
+    Average the residual RMSE over a supplied set of validation folds.
+
+    Parameters:
+        residuals: Per-row residuals for the training dataset.
+        folds: Ordered train/validation index pairs.
+
+    Returns:
+        float: Mean RMSE across the supplied validation folds.
+    """
+    fold_rmses = [
+        np.sqrt(np.mean(residuals[validation_indices] ** 2))
+        for _, validation_indices in folds
+    ]
+    return float(np.mean(fold_rmses))
+
 
 
 def effective_df(model, X_train: np.ndarray, y_train: np.ndarray) -> float:
@@ -252,6 +273,7 @@ class SweepResult:
     effective_df: float
     replicate: int
     y_hash: str
+    validation_input_hash: str
     train_test_split_hash: str
     cv_fold_hash: str
     master_seed: int
@@ -274,6 +296,7 @@ class SweepResult:
             "Effective DF": self.effective_df,
             "Replicate": self.replicate,
             "Y SHA256": self.y_hash,
+            "Validation Input SHA256": self.validation_input_hash,
             "Train/Test Split SHA256": self.train_test_split_hash,
             "CV Fold Indices SHA256": self.cv_fold_hash,
             "Master Seed": self.master_seed,
@@ -289,7 +312,7 @@ def run_degree_sweep(
     true_coefs: np.ndarray,
     max_degree: int,
     n_replicates: int = 50,
-    n_jobs: int = -1,
+    n_jobs: int = 1,
 ) -> pd.DataFrame:
     """
     Run the degree sweep and return rows for every dataset/model/degree.
@@ -305,7 +328,34 @@ def run_degree_sweep(
 
     Returns:
         pd.DataFrame: Results and reproducibility metadata for all runs.
+    Raises:
+        ValueError: If alpha is negative or non-finite, noise is non-positive or
+            non-finite, n_replicates or max_degree is not a positive integer,
+            or the polynomial design saturates the smallest CV training fold.
+        TypeError: If alpha or noise is not numeric.
+        subprocess.CalledProcessError: If Git cannot resolve the repository
+            commit or working-tree status.
+        FileNotFoundError: If the Git executable is unavailable.
     """
+    if not np.isfinite(alpha) or alpha < 0:
+        raise ValueError("alpha must be finite and non-negative.")
+    if not np.isfinite(noise) or noise <= 0:
+        raise ValueError("noise must be finite and greater than zero.")
+    if isinstance(n_replicates, bool) or not isinstance(n_replicates, (int, np.integer)) or n_replicates < 1:
+        raise ValueError("n_replicates must be a positive integer.")
+    if isinstance(max_degree, bool) or not isinstance(max_degree, (int, np.integer)) or max_degree < 1:
+        raise ValueError("max_degree must be a positive integer.")
+
+    small_train_size = int(60 * 0.8)
+    smallest_fold_train_size = min(
+        len(train_indices)
+        for train_indices, _ in KFold(5).split(np.empty(small_train_size))
+    )
+    if max_degree + 1 >= smallest_fold_train_size:
+        raise ValueError(
+            "max_degree + 1 must be smaller than the smallest CV training-fold size "
+            f"({smallest_fold_train_size})."
+        )
     commit_hash, working_tree_dirty = current_git_metadata()
     result_rows = []
     degrees = np.arange(1, max_degree + 1)
@@ -329,15 +379,15 @@ def run_degree_sweep(
             split_hash = hash_arrays(train_indices, test_indices)
             folds = list(splitter.split(X_train, y_train))
             fold_hash = hash_cv_folds(folds)
-            floor = cv_rmse_per_fold(
-                splitter, y_train - poly.polyval(X_train.ravel(), true_coefs)
-            )
+            residuals = y_train - polyval(X_train.ravel(), true_coefs)
+            floor = mean_fold_rmse(residuals, folds)
 
             model_specs = (
                 (least_squares, "poly__degree", "LinearRegression"),
                 (ridge, "polynomial__degree", "Ridge"),
             )
             for model, degree_parameter, estimator_name in model_specs:
+                validation_input_hash = hash_arrays(X_train, y_train)
                 curve = validation_curve(
                     model,
                     X_train,
@@ -354,6 +404,8 @@ def run_degree_sweep(
                         **{degree_parameter: int(degree)}
                     )
                     _, condition_num, _ = placement(degree_model, X_train, y_train)
+                    if condition_num == 0:
+                        condition_num = np.nan
                     result_rows.append(SweepResult(
                         train_test_seed=int(train_test_seed),
                         splitter_seed=int(split_seed),
@@ -375,6 +427,7 @@ def run_degree_sweep(
                         ),
                         replicate=replicate,
                         y_hash=y_hash,
+                        validation_input_hash=validation_input_hash,
                         train_test_split_hash=split_hash,
                         cv_fold_hash=fold_hash,
                         master_seed=master_seed,

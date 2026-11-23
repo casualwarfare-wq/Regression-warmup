@@ -1,7 +1,11 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
+from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import PolynomialFeatures, StandardScaler
+from sklearn.linear_model import LinearRegression
 
 import src.degree_sweep as degree_sweep
 
@@ -87,7 +91,10 @@ def test_sweep_reuses_generated_data_and_split_indices_across_models(monkeypatch
             "X": X.copy(),
             "y": y.copy(),
             "folds": [(train.copy(), valid.copy()) for train, valid in folds],
+            "x_hash": degree_sweep.hash_array(X),
+            "y_hash": degree_sweep.hash_array(y),
             "fold_hash": degree_sweep.hash_cv_folds(folds),
+            "validation_input_hash": degree_sweep.hash_arrays(X, y),
         }
         curve_calls.append(curve_call)
         active_curve.update({
@@ -145,6 +152,7 @@ def test_sweep_reuses_generated_data_and_split_indices_across_models(monkeypatch
         X, y = generated
         assert rows["Y SHA256"].nunique() == 1
         assert rows["Y SHA256"].iloc[0] == degree_sweep.hash_array(y)
+        assert rows["Validation Input SHA256"].nunique() == 1
         assert rows["Train/Test Split SHA256"].nunique() == 1
         assert rows["CV Fold Indices SHA256"].nunique() == 1
         assert rows["Master Seed"].eq(MASTER_SEED).all()
@@ -167,6 +175,8 @@ def test_sweep_reuses_generated_data_and_split_indices_across_models(monkeypatch
             if call["replicate"] == replicate and call["dataset"] == dataset
         ]
         assert len(matching_curves) == 2
+        for key in ("x_hash", "y_hash", "fold_hash", "validation_input_hash"):
+            assert len({call[key] for call in matching_curves}) == 1
         expected_fold_hashes = {call["fold_hash"] for call in matching_curves}
         assert len(expected_fold_hashes) == 1
         assert rows["CV Fold Indices SHA256"].iloc[0] == expected_fold_hashes.pop()
@@ -174,6 +184,11 @@ def test_sweep_reuses_generated_data_and_split_indices_across_models(monkeypatch
         for curve_call in matching_curves:
             assert np.array_equal(curve_call["X"], X_train)
             assert np.array_equal(curve_call["y"], y_train)
+            assert rows["Validation Input SHA256"].iloc[0] == curve_call["validation_input_hash"]
+            residuals = y_train - degree_sweep.polyval(X_train.ravel(), TRUE_COEFS)
+            assert rows["Floor"].iloc[0] == degree_sweep.mean_fold_rmse(
+                residuals, curve_call["folds"]
+            )
             expected_fit_arrays = [
                 (
                     degree_sweep.hash_array(X_train[train_fold]),
@@ -193,6 +208,7 @@ def test_sweep_reuses_generated_data_and_split_indices_across_models(monkeypatch
             ]
             ridge_fit = fit_calls[(replicate, dataset, "Ridge", degree)]
             assert ols_fit == ridge_fit
+        assert rows.loc[rows["Degree"] == 1, "Condition Number"].isna().all()
 
         regenerated_X, regenerated_y = original_make_poly_data(
             n=500 if dataset == "Big" else 60,
@@ -204,6 +220,92 @@ def test_sweep_reuses_generated_data_and_split_indices_across_models(monkeypatch
         )
         assert np.array_equal(regenerated_X, X)
         assert np.array_equal(regenerated_y, y)
+
+
+def test_curve_scores_negates_negative_rmse_and_preserves_train_cv_order():
+    curve = (
+        np.array([[-2.0, -4.0], [-10.0, -14.0]]),
+        np.array([[-6.0, -8.0], [-3.0, -5.0]]),
+    )
+
+    train_rmse, cv_rmse = degree_sweep.curve_scores(curve)
+
+    np.testing.assert_array_equal(train_rmse, [3.0, 12.0])
+    np.testing.assert_array_equal(cv_rmse, [7.0, 4.0])
+
+
+def test_mean_fold_rmse_uses_supplied_validation_indices():
+    residuals = np.array([100.0, 3.0, 4.0, 200.0, 0.0, 5.0])
+    folds = [
+        (np.array([2, 3, 4, 5]), np.array([0, 1])),
+        (np.array([0, 1, 4, 5]), np.array([2, 3])),
+        (np.array([0, 1, 2, 3]), np.array([4, 5])),
+    ]
+
+    result = degree_sweep.mean_fold_rmse(residuals, folds)
+
+    expected = np.mean([
+        np.sqrt(np.mean(residuals[[0, 1]] ** 2)),
+        np.sqrt(np.mean(residuals[[2, 3]] ** 2)),
+        np.sqrt(np.mean(residuals[[4, 5]] ** 2)),
+    ])
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    ("alpha", "noise", "n_replicates", "max_degree"),
+    [
+        (-1.0, 200.0, 1, 12),
+        (np.nan, 200.0, 1, 12),
+        (0.1, 0.0, 1, 12),
+        (0.1, np.nan, 1, 12),
+        (0.1, 200.0, 0, 12),
+        (0.1, 200.0, 1, 0),
+        (0.1, 200.0, 1, 37),
+    ],
+)
+def test_run_rejects_invalid_sweep_parameters(
+    alpha, noise, n_replicates, max_degree, monkeypatch
+):
+    monkeypatch.setattr(
+        degree_sweep, "current_git_metadata", lambda: (COMMIT_HASH, False)
+    )
+
+    with pytest.raises(ValueError):
+        degree_sweep.run_degree_sweep(
+            alpha=alpha,
+            master_seed=MASTER_SEED,
+            noise=noise,
+            true_coefs=TRUE_COEFS,
+            max_degree=max_degree,
+            n_replicates=n_replicates,
+        )
+
+
+def test_mean_cv_effective_df_for_ols_uses_rank_with_numpy_cutoff():
+    X = np.linspace(0, 20, 48).reshape(-1, 1)
+    y = X.ravel() ** 3 + 2 * X.ravel()
+    model = Pipeline([
+        ("poly", PolynomialFeatures(degree=12)),
+        ("scale", StandardScaler()),
+        ("linreg", LinearRegression()),
+    ])
+    cv = KFold(5)
+    expected_ranks = []
+
+    for train_indices, _ in cv.split(X, y):
+        transformed = model[:-1].fit_transform(X[train_indices], y[train_indices])
+        design = np.column_stack((np.ones(len(train_indices)), transformed))
+        singular_values = np.linalg.svd(design, compute_uv=False)
+        tolerance = singular_values.max() * max(design.shape) * np.finfo(float).eps
+        expected_ranks.append(np.count_nonzero(singular_values > tolerance))
+
+    result = degree_sweep.mean_cv_effective_df(
+        model, "poly__degree", 12, X, y, cv
+    )
+
+    assert result == np.mean(expected_ranks)
+    assert all(1 <= rank <= 13 for rank in expected_ranks)
 
 
 def test_git_metadata_marks_dirty_worktree_without_invoking_git(monkeypatch):
