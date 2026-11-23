@@ -279,6 +279,7 @@ class SweepResult:
     master_seed: int
     commit_hash: str
     working_tree_dirty: bool
+    rank: int
 
     def as_row(self) -> dict[str, object]:
         """Return this record as one results-table row."""
@@ -302,6 +303,7 @@ class SweepResult:
             "Master Seed": self.master_seed,
             "Commit Hash": self.commit_hash,
             "Working Tree Dirty": self.working_tree_dirty,
+            "Rank": self.rank
         }
 
 
@@ -369,7 +371,7 @@ def run_degree_sweep(
             ("scale", StandardScaler()),
             ("linreg", LinearRegression()),
         ])
-        ridge = build_pipelines(9)["scale_afterpoly"]
+        ridge = build_pipelines(1)["scale_afterpoly"]
         ridge.set_params(ridge__alpha=alpha)
 
         for dataset, (X, y) in datasets.items():
@@ -403,6 +405,8 @@ def run_degree_sweep(
                     degree_model = clone(model).set_params(
                         **{degree_parameter: int(degree)}
                     )
+                    transformed = clone(degree_model[:-1]).fit_transform(X_train, y_train)
+                    rank = int(np.linalg.matrix_rank(transformed))
                     _, condition_num, _ = placement(degree_model, X_train, y_train)
                     if condition_num == 0:
                         condition_num = np.nan
@@ -433,6 +437,7 @@ def run_degree_sweep(
                         master_seed=master_seed,
                         commit_hash=commit_hash,
                         working_tree_dirty=working_tree_dirty,
+                        rank=rank
                     ))
 
     return pd.DataFrame([result.as_row() for result in result_rows])
@@ -462,6 +467,7 @@ def main(argv: list[str] | None = None) -> None:
         noise=args.noise,
         true_coefs=np.asarray(args.true_coefs),
         max_degree=args.degree,
+        n_replicates=200
     )
     results.to_csv(args.out)
 

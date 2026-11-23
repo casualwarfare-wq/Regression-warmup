@@ -208,6 +208,14 @@ def test_sweep_reuses_generated_data_and_split_indices_across_models(monkeypatch
             ]
             ridge_fit = fit_calls[(replicate, dataset, "Ridge", degree)]
             assert ols_fit == ridge_fit
+            transformed = Pipeline([
+                ("poly", PolynomialFeatures(degree=degree)),
+                ("scale", StandardScaler()),
+            ]).fit_transform(X_train, y_train)
+            expected_rank = np.linalg.matrix_rank(transformed)
+            assert rows.loc[rows["Degree"] == degree, "Rank"].eq(
+                expected_rank
+            ).all()
         assert rows.loc[rows["Degree"] == 1, "Condition Number"].isna().all()
 
         regenerated_X, regenerated_y = original_make_poly_data(
