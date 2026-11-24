@@ -213,9 +213,13 @@ def test_sweep_reuses_generated_data_and_split_indices_across_models(monkeypatch
                 ("scale", StandardScaler()),
             ]).fit_transform(X_train, y_train)
             expected_rank = np.linalg.matrix_rank(transformed)
-            assert rows.loc[rows["Degree"] == degree, "Rank"].eq(
-                expected_rank
-            ).all()
+            degree_rows = rows.loc[rows["Degree"] == degree]
+            assert degree_rows.loc[
+                degree_rows["Estimator"] == "LinearRegression", "Rank"
+            ].eq(degree).all()
+            assert degree_rows.loc[
+                degree_rows["Estimator"] == "Ridge", "Rank"
+            ].eq(expected_rank).all()
         assert rows.loc[rows["Degree"] == 1, "Condition Number"].isna().all()
 
         regenerated_X, regenerated_y = original_make_poly_data(
@@ -228,6 +232,26 @@ def test_sweep_reuses_generated_data_and_split_indices_across_models(monkeypatch
         )
         assert np.array_equal(regenerated_X, X)
         assert np.array_equal(regenerated_y, y)
+
+
+def test_sweep_requires_ols_rank_to_match_nonconstant_columns():
+    sweep_args = {
+        "alpha": 1e-3,
+        "master_seed": MASTER_SEED,
+        "noise": 200,
+        "true_coefs": TRUE_COEFS,
+        "max_degree": 9,
+        "n_replicates": 1,
+        "n_jobs": 1,
+    }
+
+    with pytest.raises(RuntimeError, match="OLS rank .* non-constant"):
+        degree_sweep.run_degree_sweep(**sweep_args)
+
+    results = degree_sweep.run_degree_sweep(**sweep_args, tol=1e-8)
+
+    ols_results = results.loc[results["Estimator"] == "LinearRegression"]
+    assert ols_results["Rank"].eq(ols_results["Degree"]).all()
 
 
 def test_curve_scores_negates_negative_rmse_and_preserves_train_cv_order():

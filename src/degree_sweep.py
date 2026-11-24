@@ -315,6 +315,7 @@ def run_degree_sweep(
     max_degree: int,
     n_replicates: int = 50,
     n_jobs: int = 1,
+    tol: float = 1e-6
 ) -> pd.DataFrame:
     """
     Run the degree sweep and return rows for every dataset/model/degree.
@@ -327,6 +328,7 @@ def run_degree_sweep(
         max_degree: Highest polynomial degree included in the sweep.
         n_replicates: Number of independent replicates to run.
         n_jobs: Parallel jobs passed to sklearn's validation_curve.
+        tol: Tolerance used by the unregularized LinearRegression estimator.
 
     Returns:
         pd.DataFrame: Results and reproducibility metadata for all runs.
@@ -334,6 +336,8 @@ def run_degree_sweep(
         ValueError: If alpha is negative or non-finite, noise is non-positive or
             non-finite, n_replicates or max_degree is not a positive integer,
             or the polynomial design saturates the smallest CV training fold.
+        RuntimeError: If the unregularized estimator rank does not match the
+            number of non-constant transformed features.
         TypeError: If alpha or noise is not numeric.
         subprocess.CalledProcessError: If Git cannot resolve the repository
             commit or working-tree status.
@@ -369,7 +373,7 @@ def run_degree_sweep(
         least_squares = Pipeline([
             ("poly", PolynomialFeatures()),
             ("scale", StandardScaler()),
-            ("linreg", LinearRegression()),
+            ("linreg", LinearRegression(tol=tol)),
         ])
         ridge = build_pipelines(1)["scale_afterpoly"]
         ridge.set_params(ridge__alpha=alpha)
@@ -405,8 +409,26 @@ def run_degree_sweep(
                     degree_model = clone(model).set_params(
                         **{degree_parameter: int(degree)}
                     )
-                    transformed = clone(degree_model[:-1]).fit_transform(X_train, y_train)
-                    rank = int(np.linalg.matrix_rank(transformed))
+
+                    if isinstance(degree_model[-1], LinearRegression):
+                        transformed = clone(degree_model).fit(X_train, y_train)
+                        rank = int(transformed[-1].rank_)
+                        features = transformed[:-1].transform(X_train)
+                        nonconstant_columns = int(
+                            np.count_nonzero(np.any(features != features[0], axis=0))
+                        )
+                        if rank != nonconstant_columns:
+                            raise RuntimeError(
+                                f"OLS rank {rank} does not match the number of "
+                                f"non-constant transformed columns "
+                                f"({nonconstant_columns}) for {dataset} degree "
+                                f"{degree}; use a smaller tol."
+                            )
+                    elif isinstance(degree_model[-1], Ridge):
+                        transformed = clone(degree_model[:-1]).fit_transform(X_train, y_train)
+                        rank = np.linalg.matrix_rank(transformed)
+                        print(np.linalg.svd(transformed, compute_uv=False)[-2])
+
                     _, condition_num, _ = placement(degree_model, X_train, y_train)
                     if condition_num == 0:
                         condition_num = np.nan
@@ -467,7 +489,8 @@ def main(argv: list[str] | None = None) -> None:
         noise=args.noise,
         true_coefs=np.asarray(args.true_coefs),
         max_degree=args.degree,
-        n_replicates=200
+        n_replicates=5,
+        tol = 1e-8
     )
     results.to_csv(args.out)
 
