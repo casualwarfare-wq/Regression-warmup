@@ -1,12 +1,5 @@
 import numpy as np
 import pandas as pd
-from sklearn.base import clone
-from sklearn.linear_model import LinearRegression, Ridge
-from sklearn.model_selection import KFold, train_test_split, validation_curve, ValidationCurveDisplay
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import PolynomialFeatures, StandardScaler
-from numpy.polynomial.polynomial import polyval
-from poly import add_noise_floor
 import matplotlib.pyplot as plt
 import argparse
 
@@ -22,15 +15,17 @@ def make_curve(df: pd.DataFrame) -> pd.DataFrame:
     data.columns = ["Degree", "CV Ratio", "Train Ratio", "CV-Train"]
     return data
 
-def make_curve_plot(curve: pd.DataFrame, ax) -> None:
+def make_curve_plot(estimator:str,curve: pd.DataFrame, ax) -> None:
     """
     Make a degree sweep curve plot.
     Parameters:
+        estimator: name of the type of estimator used
         curve: Dataframe containing Ratios and Degree to plot with. 
         ax: what axis to plot on
     """
-    ax.plot(X, curve.groupby("Degree")["CV Ratio"].median())
-    ax.plot(X, curve.groupby("Degree")["Train Ratio"].median())
+    X = curve["Degree"].unique()
+    ax.plot(X, curve.groupby("Degree")["CV Ratio"].median(),label=f"{estimator} CV Ratio" )
+    ax.plot(X, curve.groupby("Degree")["Train Ratio"].median(),label=f"{estimator} Train Ratio")
     ax.fill_between(X, curve.groupby("Degree")["CV Ratio"].quantile(0.1), curve.groupby("Degree")["CV Ratio"].quantile(0.9), alpha=0.4)
     ax.fill_between(X, curve.groupby("Degree")["Train Ratio"].quantile(0.1), curve.groupby("Degree")["Train Ratio"].quantile(0.9), alpha=0.4)
     ax.grid(True)
@@ -42,7 +37,6 @@ if __name__ == "__main__":
     parser.add_argument("--csv", type=str, default='results.csv', help='The file the degree sweep results are from')
     args = parser.parse_args()
     df = pd.read_csv(args.csv, index_col=0)
-    X = np.arange(1, df['Degree'].nunique()+1)
     Big_LS = df[(df["Estimator"] == 'LinearRegression') & (df['Dataset'] == 'Big')]
     Big_R = df[(df["Estimator"] == 'Ridge') & (df['Dataset'] == 'Big')]
     Small_LS = df[(df['Dataset'] == 'Small') & (df['Estimator'] == 'LinearRegression')]
@@ -55,29 +49,15 @@ if __name__ == "__main__":
 
     fig, axs = plt.subplots(1,2, figsize=(12,6))
     axs[0].axhline(1, label=str(1), linestyle='--',color='grey')
-    make_curve_plot(Big_LS_curves, axs[0])
-    make_curve_plot(Big_R_curves, axs[0])
+    make_curve_plot("Big LS", Big_LS_curves, axs[0])
+    make_curve_plot("Big R",Big_R_curves, axs[0])
     
     axs[0].set_title("Big Dataset Ratio Curves")
 
     axs[1].axhline(1, label=str(1), linestyle='--',color='grey')
-    make_curve_plot(Small_LS_curves, axs[1])
-    make_curve_plot(Small_R_curves, axs[1])
+    make_curve_plot("Small LS",Small_LS_curves, axs[1])
+    make_curve_plot("Small R", Small_R_curves, axs[1])
     axs[1].set_title("Small Dataset Ratio Curves")
-    
-    #Predictions
-    axs[1].plot([1,3,12],[2.862666540432592,0.9459053029269173,0.8111071056538127], 'o')
-    axs[0].plot([9],[0.9842509842514764], 'o')
-    axs[1].plot([1,3,12], [2.880993384165788, 1.0513149660756935,1.1584926685818493], 'o')
-    axs[0].plot([9],[1.015504800579495], 'o')
-    axs[1].plot([12], [0.8111071056538127], 'o')
-    axs[1].plot([12],[1.1584926685818493],'o')
-    axs[0].plot([12], [0.9794769012079866], 'o')
-    axs[0].plot([12],[1.02881551583],'o')
-
-    axs[0].legend(["Floor", "Big LS CV Ratio", "Big LS Train Ratio","Big LS CV Band", "Big LS Train Band", "Big Ridge CV Ratio","Big Ridge Train Ratio","Big Ridge CV Band","Big Ridge Train Band", "LS Train Ratio predictions","LS CV Ratio Preds","Ridge Train Ratio Preds","Ridge CV Ratio Preds"])
-    axs[1].legend(["Floor","Small LS CV Ratio", "Small LS Train Ratio","Small LS CV Band", "Small LS Train Band", "Small Ridge CV Ratio","Small Ridge Train Ratio","Small Ridge CV Band","Small Ridge Train Band","LS Train Ratio predictions","LS CV Ratio Preds","Ridge Train Ratio Preds","Ridge CV Ratio Preds"])
-
     predictions = {
         ("Small", "LinearRegression"): {
             1: (2.862666540432592, 2.880993384165788),
@@ -94,6 +74,31 @@ if __name__ == "__main__":
             12: (0.9794769012079866, 1.02881551583),
         },
     }
+    for (dataset, estimator), degree_predictions in predictions.items():
+        ax = axs[0] if dataset == "Big" else axs[1]
+        degrees = list(degree_predictions)
+        train_predictions = [
+            degree_predictions[degree][0] for degree in degrees
+        ]
+        cv_predictions = [
+            degree_predictions[degree][1] for degree in degrees
+        ]
+        ax.plot(
+            degrees,
+            train_predictions,
+            "o",
+            label=f"{dataset} {estimator} Train Ratio predictions",
+        )
+        ax.plot(
+            degrees,
+            cv_predictions,
+            "o",
+            label=f"{dataset} {estimator} CV Ratio predictions",
+        )
+
+    axs[0].legend()
+    axs[1].legend()
+
     actual_curves = {
         ("Small", "LinearRegression"): Small_LS_curves,
         ("Big", "LinearRegression"): Big_LS_curves,
@@ -133,7 +138,5 @@ if __name__ == "__main__":
                     "Actual": actual,
                     "Result": result,
                 })
-
     pd.DataFrame(comparison_rows).to_csv("prediction_vs_actual.csv", index=False)
-
     plt.show()

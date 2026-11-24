@@ -369,9 +369,9 @@ def run_degree_sweep(
     noise: float,
     true_coefs: np.ndarray,
     max_degree: int,
+    tol: float,
     n_replicates: int = 50,
     n_jobs: int = 1,
-    tol: float = 1e-6
 ) -> pd.DataFrame:
     """
     Run the degree sweep and return rows for every dataset/model/degree.
@@ -444,7 +444,7 @@ def run_degree_sweep(
             (
                 minimum_genuine_singular_value,
                 minimum_observed_ratio,
-                rank_margin,
+                rank_margin
             ) = max_degree_fold_rank_metadata(
                 least_squares,
                 "poly__degree",
@@ -453,7 +453,7 @@ def run_degree_sweep(
                 y_train,
                 folds,
                 tol,
-                dataset,
+                dataset
             )
             residuals = y_train - polyval(X_train.ravel(), true_coefs)
             floor = mean_fold_rmse(residuals, folds)
