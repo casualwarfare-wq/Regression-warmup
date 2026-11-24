@@ -202,6 +202,28 @@ def test_sweep_reuses_generated_data_and_split_indices_across_models(monkeypatch
                 ]
                 assert actual_fit_arrays == expected_fit_arrays
 
+        expected_singular_values = []
+        expected_singular_ratios = []
+        for fold_train, _ in matching_curves[0]["folds"]:
+            features = Pipeline([
+                ("poly", PolynomialFeatures(degree=2)),
+                ("scale", StandardScaler()),
+            ]).fit_transform(X_train[fold_train], y_train[fold_train])
+            nonconstant = np.any(features != features[0], axis=0)
+            centered_features = features[:, nonconstant]
+            centered_features -= centered_features.mean(axis=0)
+            singular_values = np.linalg.svd(centered_features, compute_uv=False)
+            expected_singular_values.append(singular_values[-1])
+            expected_singular_ratios.append(singular_values[-1] / singular_values[0])
+
+        minimum_ratio = min(expected_singular_ratios)
+        np.testing.assert_allclose(
+            rows["Minimum Genuine Singular Value"],
+            min(expected_singular_values),
+        )
+        np.testing.assert_allclose(rows["Minimum Observed Ratio"], minimum_ratio)
+        np.testing.assert_allclose(rows["Rank Margin"], minimum_ratio - 1e-6)
+
         for degree in (1, 2):
             ols_fit = fit_calls[
                 (replicate, dataset, "LinearRegression", degree)
@@ -252,6 +274,31 @@ def test_sweep_requires_ols_rank_to_match_nonconstant_columns():
 
     ols_results = results.loc[results["Estimator"] == "LinearRegression"]
     assert ols_results["Rank"].eq(ols_results["Degree"]).all()
+
+
+def test_sweep_fails_when_any_max_degree_fold_rank_is_wrong(monkeypatch):
+    original_fit = LinearRegression.fit
+
+    def fit_with_fold_rank_miss(self, X, y, *args, **kwargs):
+        result = original_fit(self, X, y, *args, **kwargs)
+        if X.shape[0] == 320:
+            self.rank_ -= 1
+        return result
+
+    monkeypatch.setattr(LinearRegression, "fit", fit_with_fold_rank_miss)
+    monkeypatch.setattr(
+        degree_sweep, "current_git_metadata", lambda: (COMMIT_HASH, False)
+    )
+
+    with pytest.raises(RuntimeError, match="CV fold 1"):
+        degree_sweep.run_degree_sweep(
+            alpha=1e-3,
+            master_seed=MASTER_SEED,
+            noise=200,
+            true_coefs=TRUE_COEFS,
+            max_degree=1,
+            n_replicates=1,
+        )
 
 
 def test_curve_scores_negates_negative_rmse_and_preserves_train_cv_order():

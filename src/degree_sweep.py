@@ -256,6 +256,56 @@ def mean_cv_effective_df(
     return float(np.mean(fold_dfs))
 
 
+def max_degree_fold_rank_metadata(
+    model,
+    parameter: str,
+    degree: int,
+    X: np.ndarray,
+    y: np.ndarray,
+    folds: list[tuple[np.ndarray, np.ndarray]],
+    tol: float,
+    dataset: str,
+) -> tuple[float, float, float]:
+    """Return min singular value, min singular-value ratio, and ratio-minus-tol."""
+    smallest_singular_values = []
+    singular_value_ratios = []
+
+    for fold_number, (train_indices, _) in enumerate(folds, start=1):
+        fold_model = clone(model).set_params(**{parameter: degree})
+        fold_model.fit(X[train_indices], y[train_indices])
+        rank = int(fold_model[-1].rank_)
+        features = fold_model[:-1].transform(X[train_indices])
+        nonconstant = np.any(features != features[0], axis=0)
+        expected_rank = int(np.count_nonzero(nonconstant))
+        if rank != expected_rank:
+            raise RuntimeError(
+                f"OLS rank {rank} does not match the number of non-constant "
+                f"transformed columns ({expected_rank}) for {dataset} degree "
+                f"{degree}, CV fold {fold_number}; use a smaller tol."
+            )
+
+        centered_features = features[:, nonconstant]
+        centered_features = centered_features - centered_features.mean(axis=0)
+        singular_values = np.linalg.svd(centered_features, compute_uv=False)
+        minimum_singular_value = float(singular_values[-1])
+        observed_ratio = minimum_singular_value / float(singular_values[0])
+        if observed_ratio <= tol:
+            raise RuntimeError(
+                f"OLS rank margin is not positive for {dataset} degree {degree}, "
+                f"CV fold {fold_number}: minimum singular-value ratio "
+                f"{observed_ratio} is not greater than tol {tol}."
+            )
+        smallest_singular_values.append(minimum_singular_value)
+        singular_value_ratios.append(observed_ratio)
+
+    minimum_observed_ratio = min(singular_value_ratios)
+    return (
+        min(smallest_singular_values),
+        minimum_observed_ratio,
+        minimum_observed_ratio - tol,
+    )
+
+
 @dataclass(frozen=True)
 class SweepResult:
     """Typed record for one dataset, estimator, and degree result."""
@@ -280,6 +330,9 @@ class SweepResult:
     commit_hash: str
     working_tree_dirty: bool
     rank: int
+    minimum_genuine_singular_value: float
+    minimum_observed_ratio: float
+    rank_margin: float
 
     def as_row(self) -> dict[str, object]:
         """Return this record as one results-table row."""
@@ -303,7 +356,10 @@ class SweepResult:
             "Master Seed": self.master_seed,
             "Commit Hash": self.commit_hash,
             "Working Tree Dirty": self.working_tree_dirty,
-            "Rank": self.rank
+            "Rank": self.rank,
+            "Minimum Genuine Singular Value": self.minimum_genuine_singular_value,
+            "Minimum Observed Ratio": self.minimum_observed_ratio,
+            "Rank Margin": self.rank_margin,
         }
 
 
@@ -336,8 +392,8 @@ def run_degree_sweep(
         ValueError: If alpha is negative or non-finite, noise is non-positive or
             non-finite, n_replicates or max_degree is not a positive integer,
             or the polynomial design saturates the smallest CV training fold.
-        RuntimeError: If the unregularized estimator rank does not match the
-            number of non-constant transformed features.
+        RuntimeError: If any maximum-degree CV fold has an OLS rank mismatch or
+            a non-positive margin above the rank tolerance.
         TypeError: If alpha or noise is not numeric.
         subprocess.CalledProcessError: If Git cannot resolve the repository
             commit or working-tree status.
@@ -385,6 +441,20 @@ def run_degree_sweep(
             split_hash = hash_arrays(train_indices, test_indices)
             folds = list(splitter.split(X_train, y_train))
             fold_hash = hash_cv_folds(folds)
+            (
+                minimum_genuine_singular_value,
+                minimum_observed_ratio,
+                rank_margin,
+            ) = max_degree_fold_rank_metadata(
+                least_squares,
+                "poly__degree",
+                int(max_degree),
+                X_train,
+                y_train,
+                folds,
+                tol,
+                dataset,
+            )
             residuals = y_train - polyval(X_train.ravel(), true_coefs)
             floor = mean_fold_rmse(residuals, folds)
 
@@ -427,7 +497,6 @@ def run_degree_sweep(
                     elif isinstance(degree_model[-1], Ridge):
                         transformed = clone(degree_model[:-1]).fit_transform(X_train, y_train)
                         rank = np.linalg.matrix_rank(transformed)
-                        print(np.linalg.svd(transformed, compute_uv=False)[-2])
 
                     _, condition_num, _ = placement(degree_model, X_train, y_train)
                     if condition_num == 0:
@@ -459,7 +528,10 @@ def run_degree_sweep(
                         master_seed=master_seed,
                         commit_hash=commit_hash,
                         working_tree_dirty=working_tree_dirty,
-                        rank=rank
+                        rank=rank,
+                        minimum_genuine_singular_value=minimum_genuine_singular_value,
+                        minimum_observed_ratio=minimum_observed_ratio,
+                        rank_margin=rank_margin,
                     ))
 
     return pd.DataFrame([result.as_row() for result in result_rows])
@@ -489,8 +561,8 @@ def main(argv: list[str] | None = None) -> None:
         noise=args.noise,
         true_coefs=np.asarray(args.true_coefs),
         max_degree=args.degree,
-        n_replicates=5,
-        tol = 1e-8
+        n_replicates=200,
+        tol = 1e-11
     )
     results.to_csv(args.out)
 

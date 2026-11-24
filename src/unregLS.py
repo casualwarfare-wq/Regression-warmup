@@ -1,5 +1,5 @@
-from src.poly import make_poly_data, cv_rmse_per_fold
-import src.poly
+from poly import make_poly_data, cv_rmse_per_fold
+import poly
 import numpy as np
 from sklearn.model_selection import KFold, train_test_split
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
