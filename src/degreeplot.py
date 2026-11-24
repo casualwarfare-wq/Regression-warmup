@@ -24,10 +24,30 @@ def make_curve_plot(estimator:str,curve: pd.DataFrame, ax) -> None:
         ax: what axis to plot on
     """
     X = curve["Degree"].unique()
-    ax.plot(X, curve.groupby("Degree")["CV Ratio"].median(),label=f"{estimator} CV Ratio" )
-    ax.plot(X, curve.groupby("Degree")["Train Ratio"].median(),label=f"{estimator} Train Ratio")
-    ax.fill_between(X, curve.groupby("Degree")["CV Ratio"].quantile(0.1), curve.groupby("Degree")["CV Ratio"].quantile(0.9), alpha=0.4)
-    ax.fill_between(X, curve.groupby("Degree")["Train Ratio"].quantile(0.1), curve.groupby("Degree")["Train Ratio"].quantile(0.9), alpha=0.4)
+    gbd_curve = curve.groupby('Degree')
+    ax.plot(X, gbd_curve["CV Ratio"].median(),label=f"{estimator} CV Ratio" )
+    ax.plot(X, gbd_curve["Train Ratio"].median(),label=f"{estimator} Train Ratio")
+    
+    ax.fill_between(X, gbd_curve["CV Ratio"].quantile(0.1), gbd_curve["CV Ratio"].quantile(0.9), alpha=0.4)
+    ax.fill_between(X, gbd_curve["Train Ratio"].quantile(0.1), gbd_curve["Train Ratio"].quantile(0.9), alpha=0.4)
+    
+    ax.grid(True)
+    ax.set_ylabel("Ratios From Floor")
+    ax.set_xlabel("Degree")
+    ax.set_yscale('log')
+
+def graph_cv_train_gaps(estimator: str, curve: pd.DataFrame, ax) -> None:
+    """
+    Graphs CV-Train Ratio.
+    Parameters:
+        estimator: name of estimator used
+        curve: Dataframe contiaing Degree and Ratios to plot with
+        ax: what axis to plot on
+    """
+    X = curve["Degree"].unique()
+    gbd_curve = curve.groupby('Degree')
+    ax.plot(X, gbd_curve["CV-Train"].median(),label=f"{estimator} CV-Train Ratio")
+    ax.fill_between(X, gbd_curve["CV-Train"].quantile(0.1), gbd_curve["CV-Train"].quantile(0.9), alpha=0.4)
     ax.grid(True)
     ax.set_ylabel("Ratios From Floor")
     ax.set_xlabel("Degree")
@@ -47,17 +67,24 @@ if __name__ == "__main__":
     Small_LS_curves = make_curve(Small_LS)
     Small_R_curves = make_curve(Small_R)
 
-    fig, axs = plt.subplots(1,2, figsize=(12,6))
-    axs[0].axhline(1, label=str(1), linestyle='--',color='grey')
+    fig, axs = plt.subplots(1,3, figsize=(18,6))
+    axs[0].axhline(1, label="Floor: 1", linestyle='--',color='grey')
     make_curve_plot("Big LS", Big_LS_curves, axs[0])
     make_curve_plot("Big R",Big_R_curves, axs[0])
     
     axs[0].set_title("Big Dataset Ratio Curves")
 
-    axs[1].axhline(1, label=str(1), linestyle='--',color='grey')
+    axs[1].axhline(1, label="Floor: 1", linestyle='--',color='grey')
     make_curve_plot("Small LS",Small_LS_curves, axs[1])
     make_curve_plot("Small R", Small_R_curves, axs[1])
     axs[1].set_title("Small Dataset Ratio Curves")
+
+    axs[2].axhline(1, label="Floor: 1", linestyle='--',color='grey')
+    graph_cv_train_gaps("Big LS", Big_LS_curves, axs[2])
+    graph_cv_train_gaps("Big Ridge", Big_R_curves, axs[2])
+    graph_cv_train_gaps("Small LS", Small_LS_curves, axs[2])
+    graph_cv_train_gaps("Small Ridge", Small_R_curves,axs[2])
+    axs[2].set_title("CV-Train Gaps")
     predictions = {
         ("Small", "LinearRegression"): {
             1: (2.862666540432592, 2.880993384165788),
@@ -71,7 +98,7 @@ if __name__ == "__main__":
             12: (0.8111071056538127, 1.1584926685818493),
         },
         ("Big", "Ridge"): {
-            12: (0.9794769012079866, 1.02881551583),
+            12: (0.9794769012079866, 1.0201102881551583),
         },
     }
     for (dataset, estimator), degree_predictions in predictions.items():
@@ -82,6 +109,10 @@ if __name__ == "__main__":
         ]
         cv_predictions = [
             degree_predictions[degree][1] for degree in degrees
+        ]
+        gap_predictions = [
+            degree_predictions[degree][1] - degree_predictions[degree][0]
+            for degree in degrees
         ]
         ax.plot(
             degrees,
@@ -95,10 +126,17 @@ if __name__ == "__main__":
             "o",
             label=f"{dataset} {estimator} CV Ratio predictions",
         )
+        axs[2].plot(
+            degrees,
+            gap_predictions,
+            "o",
+            label=f"{dataset} {estimator} CV-Train Gap predictions",
+        )
 
     axs[0].legend()
     axs[1].legend()
-
+    axs[2].legend()
+    fig.tight_layout()
     actual_curves = {
         ("Small", "LinearRegression"): Small_LS_curves,
         ("Big", "LinearRegression"): Big_LS_curves,
@@ -123,10 +161,16 @@ if __name__ == "__main__":
                 "CV-Train": cv_prediction - train_prediction,
             }
             for ratio, prediction in ratio_predictions.items():
-                actual = actual_ratios[ratio]
+                replicate_values = actual_rows[ratio].to_numpy(dtype=float)
+                band_low, band_high = np.quantile(replicate_values, [0.1, 0.9])
+                below_prediction = np.count_nonzero(replicate_values < prediction)
+                equal_prediction = np.count_nonzero(replicate_values == prediction)
+                prediction_percentile = 100 * (
+                    below_prediction + 0.5 * equal_prediction
+                ) / len(replicate_values)
                 result = (
                     "Miss"
-                    if not np.isclose(prediction, actual, rtol=0.1, atol=0)
+                    if prediction < band_low or prediction > band_high
                     else "Not miss"
                 )
                 comparison_rows.append({
@@ -135,7 +179,11 @@ if __name__ == "__main__":
                     "Degree": degree,
                     "Ratio": ratio,
                     "Prediction": prediction,
-                    "Actual": actual,
+                    "Actual": actual_ratios[ratio],
+                    "Prediction Percentile": prediction_percentile,
+                    "Replicate Count": len(replicate_values),
+                    "Replicate Band Low (10th percentile)": band_low,
+                    "Replicate Band High (90th percentile)": band_high,
                     "Result": result,
                 })
     pd.DataFrame(comparison_rows).to_csv("prediction_vs_actual.csv", index=False)

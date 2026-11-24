@@ -302,7 +302,7 @@ def max_degree_fold_rank_metadata(
     return (
         min(smallest_singular_values),
         minimum_observed_ratio,
-        minimum_observed_ratio - tol,
+        minimum_observed_ratio/tol,
     )
 
 
@@ -562,7 +562,7 @@ def main(argv: list[str] | None = None) -> None:
         true_coefs=np.asarray(args.true_coefs),
         max_degree=args.degree,
         n_replicates=200,
-        tol = 1e-11
+        tol = 5.972530780182703e-10
     )
     results.to_csv(args.out)
 
