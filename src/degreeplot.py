@@ -13,6 +13,9 @@ PREDICTIONS = {
     ("Big", "LinearRegression"): {
         9: (0.9842509842514764, 1.015504800579495),
     },
+    ("Small", "Ridge"): {
+        12: (0.8111071056538127, 1.1584926685818493),
+    },
     ("Big", "Ridge"): {
         12: (0.9794769012079866, 1.0201102881551583),
     },
@@ -214,14 +217,19 @@ def main() -> None:
     graph_cv_train_gaps("Small Ridge", Small_R_curves, axs[2])
     axs[2].set_title("CV-Train Gaps")
 
+    # Distinct marker styles and zorders prevent overlapping predictions from hiding one another
     marker_styles = {
-        "LinearRegression": ("o", 7, 10),
-        "Ridge": ("s", 6, 9),
+        ("LinearRegression", "Big"): ("o", 7, 10, "tab:blue"),
+        ("LinearRegression", "Small"): ("o", 7, 10, "tab:blue"),
+        ("Ridge", "Big"): ("s", 5, 8, "tab:orange"),
+        ("Ridge", "Small"): ("^", 6, 12, "tab:green"),
     }
 
     for (dataset, estimator), degree_predictions in PREDICTIONS.items():
         ax = axs[0] if dataset == "Big" else axs[1]
-        marker, markersize, zorder = marker_styles.get(estimator, ("o", 6, 10))
+        marker, markersize, zorder, color = marker_styles.get(
+            (estimator, dataset), ("o", 6, 10, None)
+        )
         degrees = list(degree_predictions)
         train_predictions = [degree_predictions[degree][0] for degree in degrees]
         cv_predictions = [degree_predictions[degree][1] for degree in degrees]
@@ -236,6 +244,7 @@ def main() -> None:
             linestyle="None",
             markersize=markersize,
             zorder=zorder,
+            color=color,
             label=f"{dataset} {estimator} Train Ratio predictions",
         )
         ax.plot(
@@ -245,6 +254,7 @@ def main() -> None:
             linestyle="None",
             markersize=markersize,
             zorder=zorder,
+            color=color,
             label=f"{dataset} {estimator} CV Ratio predictions",
         )
         axs[2].plot(
@@ -254,6 +264,7 @@ def main() -> None:
             linestyle="None",
             markersize=markersize,
             zorder=zorder,
+            color=color,
             label=f"{dataset} {estimator} CV-Train Gap predictions",
         )
 
@@ -272,10 +283,9 @@ def main() -> None:
     if args.out:
         comparison_df.to_csv(args.out, index=False)
 
-    
+    plt.show()
     if args.save:
         fig.savefig(args.save)
-    plt.show()
 
 
 if __name__ == "__main__":
