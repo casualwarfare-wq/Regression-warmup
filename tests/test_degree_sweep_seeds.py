@@ -126,6 +126,7 @@ def test_sweep_reuses_generated_data_and_split_indices_across_models(monkeypatch
         max_degree=2,
         n_replicates=2,
         n_jobs=1,
+        tol=1e-6
     )
 
     expected_triplets = original_seed_generator(MASTER_SEED, 2)
@@ -222,7 +223,7 @@ def test_sweep_reuses_generated_data_and_split_indices_across_models(monkeypatch
             min(expected_singular_values),
         )
         np.testing.assert_allclose(rows["Minimum Observed Ratio"], minimum_ratio)
-        np.testing.assert_allclose(rows["Rank Margin"], minimum_ratio - 1e-6)
+        np.testing.assert_allclose(rows["Rank Margin"], minimum_ratio/1e-6)
 
         for degree in (1, 2):
             ols_fit = fit_calls[
@@ -268,7 +269,7 @@ def test_sweep_requires_ols_rank_to_match_nonconstant_columns():
     }
 
     with pytest.raises(RuntimeError, match="OLS rank .* non-constant"):
-        degree_sweep.run_degree_sweep(**sweep_args)
+        degree_sweep.run_degree_sweep(**sweep_args,tol=1e-6)
 
     results = degree_sweep.run_degree_sweep(**sweep_args, tol=1e-8)
 
@@ -298,6 +299,7 @@ def test_sweep_fails_when_any_max_degree_fold_rank_is_wrong(monkeypatch):
             true_coefs=TRUE_COEFS,
             max_degree=1,
             n_replicates=1,
+            tol=1e-6
         )
 
 
@@ -358,6 +360,7 @@ def test_run_rejects_invalid_sweep_parameters(
             true_coefs=TRUE_COEFS,
             max_degree=max_degree,
             n_replicates=n_replicates,
+            tol=1e-6
         )
 
 

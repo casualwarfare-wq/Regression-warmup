@@ -5,19 +5,25 @@ This experiment aims to find the best pipeline based on the column scale gap. Th
 
 ## Part A: 
 
-| Metric | Values |
-|---|---|
-| Variance for different degrees of X (1,000,000 standard normal draws for degree 3) | [ 0, 1.00096552, 2.01363577, 15.21546207] |
-| True variance on standard normal draws | [0 1 2 15] | 
+| Degree | 0 | 1 | 2 | 3 |
+|---:|---:|---:|---:|---:|
+| Experimental variance (1,000,000 draws) | 0.00000000 | 1.00096552 | 2.01363577 | 15.21546207 |
+| True variance | 0 | 1 | 2 | 15 |
 
-Normal Moment SE: [0.0014, 0.0075, 0.10]
-Normal Moment SE deviations in SE units: [0, 0.7, 1.8, 2.1]
+| Degree | Moment SE | SE-unit deviation |
+|---:|---:|---:|
+| 1 | 0.0014 | 0.7 |
+| 2 | 0.0075 | 1.8 |
+| 3 | 0.1000 | 2.1 |
 
 With 1,000,000 standard normal draws the variation function does get close to the true variance for standard normal. I used 1,000,000,or 10^6, for n As the degrees increase there seems to be a bigger difference between the experimental and true variance. The normal draws are chosen from a normal distribution usually from -3 to 3 and the variance is calculated up to a certain degree starting from zero. The absolute difference grows with degree because the SE grows (0.0014, 0.0075, 0.10); the deviations are 0.7, 1.8 and 2.1 SE, consistent with sampling noise from one draw. I chose to go up to degree 3 as shown on the table. Anything to the power of zero is 1 so since everything is 1 in that column the variance is zero. For the normal draws as the sample size get bigger the closer the experimental variance gets to the true variance. This was the only draw I ran.
 
 ## Variance
-Variance for big dataset X(degree=3): [0.0, 32.8296008, 13598.091, 4778968.1]
-Variance for small dataset X(degree=3):  [0.0, 31.6408295, 13218.2257, 4563507.82]
+
+| Dataset | Degree 0 | Degree 1 | Degree 2 | Degree 3 |
+|---|---:|---:|---:|---:|
+| Big dataset X (n=500) | 0.0000000 | 32.8296008 | 13,598.091 | 4,778,968.1 |
+| Small dataset X (n=60) | 0.0000000 | 31.6408295 | 13,218.2257 | 4,563,507.82 |
 ## Experiment
 Pipelines will be ranked by RMSE closest to zero. Any CV_RMSE below the train floor reflects optimisism in the alpha selection or small folds. 
 Intial Experiment (seed 42):
@@ -113,6 +119,8 @@ Based off the data placing the scalar after polynomial features and putting the 
 | Small | 12 | 0.811107 | 1.158493 | 0.347386 |
 | Big | 9 | 0.984251 | 1.015505 | 0.031254 |
 
+Used $\sigma^2\frac{n-p}{n}$(expected training MSE for OLS) with an OLS estiamtor to calculate the ratios to the floor.
+
 ### Ridge overlay predictions
 
 | Dataset | Train ratio | CV ratio | CV-train ratio |
@@ -122,13 +130,39 @@ Based off the data placing the scalar after polynomial features and putting the 
 
 The n_fold_train comes from only the first fold so if another fold had a different number of rows then calculation would an appromination. 
 
+## Degree Sweep
 
+### Miss vs. Actual
 
+| Dataset | Estimator | Degree | Ratio | Prediction | Actual | Percentile | Replicates | Band low (10th) | Band high (90th) | Result |
+|---|---|---:|---|---:|---:|---:|---:|---:|---:|---|
+| Small | LinearRegression | 1 | CV | 2.880993 | 2.299629 | 97.0 | 200 | 1.950918 | 2.698597 | Miss |
+| Small | LinearRegression | 1 | Train | 2.862667 | 2.196072 | 99.0 | 200 | 1.866733 | 2.514252 | Miss |
+| Small | LinearRegression | 1 | CV-Train | 0.018327 | 0.099409 | 6.0 | 200 | 0.035448 | 0.223607 | Miss |
+| Small | LinearRegression | 3 | CV | 1.051315 | 1.060735 | 43.0 | 200 | 1.006766 | 1.112154 | Not miss |
+| Small | LinearRegression | 3 | Train | 0.945905 | 0.969225 | 24.0 | 200 | 0.926601 | 1.001494 | Not miss |
+| Small | LinearRegression | 3 | CV-Train | 0.105410 | 0.091476 | 64.0 | 200 | 0.050634 | 0.138326 | Not miss |
+| Small | LinearRegression | 12 | CV | 1.158493 | 2.058177 | 4.5 | 200 | 1.250325 | 13.280482 | Miss |
+| Small | LinearRegression | 12 | Train | 0.811107 | 0.828711 | 35.5 | 200 | 0.760174 | 0.890336 | Not miss |
+| Small | LinearRegression | 12 | CV-Train | 0.347386 | 1.288595 | 5.0 | 200 | 0.441156 | 12.448633 | Miss |
+| Big | LinearRegression | 9 | CV | 1.015505 | 1.016446 | 44.0 | 200 | 1.005470 | 1.028235 | Not miss |
+| Big | LinearRegression | 9 | Train | 0.984251 | 0.986806 | 32.5 | 200 | 0.978545 | 0.993430 | Not miss |
+| Big | LinearRegression | 9 | CV-Train | 0.031254 | 0.029579 | 60.5 | 200 | 0.020091 | 0.040802 | Not miss |
+| Small | Ridge | 12 | CV | 1.158493 | 1.101024 | 74.0 | 200 | 1.007411 | 1.230712 | Not miss |
+| Small | Ridge | 12 | Train | 0.811107 | 0.932852 | 1.0 | 200 | 0.875653 | 0.976500 | Miss |
+| Small | Ridge | 12 | CV-Train | 0.347386 | 0.166772 | 93.0 | 200 | 0.096938 | 0.299514 | Miss |
+| Big | Ridge | 12 | CV | 1.020110 | 1.010586 | 89.0 | 200 | 1.001309 | 1.020587 | Not miss |
+| Big | Ridge | 12 | Train | 0.979477 | 0.991083 | 1.5 | 200 | 0.984649 | 0.996185 | Miss |
+| Big | Ridge | 12 | CV-Train | 0.040633 | 0.019551 | 99.5 | 200 | 0.012345 | 0.028044 | Miss |
 
+#### Miss Analysis
+The sweep was run on 200 replicates with the Train, CV and CV-Train Ratios being calculated. The data was scored on medians with a band of 10th to 90th percentile of the data. If the data is within 10th to 90th percetile then it's not marked as a miss. Half of the predictions were within the 10th to 90th percentile of the data so they weren't misses. The predictions in degree 1 LS were all misses likely due to the estimator underfitting and the seed's realized floor of 144.98. When divided by the sweep's mean floor of 192.9, there is a CV ratio of 2.27 and train ratio of 2.25 which land inside the band.The CV-Train gap still lands below the 10th percentile. The predictions for LS small dataset degree 3 and big dataset degree 9 were not misses so the predictions did well there. For LS degree 12 there are misses for CV and CV-Train ratios. In Ridge,in which the prediction are a post hoc diagnostic, both dataset miss Train and CV-Train Ratios as degree 12 likely because p/n is the average training leverage and points near the edge of [0,20] are outside the range degree 12 but it's just a hypothesis.
+
+## Bias-Variance
+Using PolynomialFeatures allowed the linear models to fit non linear patterns in data with it reducing bias. For example on the n=500 dataset with a true degree of 3, the degree 1 base model gets an RMSE of 430.9955141010223 which is way higher compared to the degree 9 pipeline scale_afterpoly with it getting an RMSE of 207.65590599061298. Another example, the miss vs actual table shows on the small dataset the predictions missing the actual data on degree 1 LS while the predictions on degree 3 all hit within the percentile band. Although the tradeoff is with the reduction in bias there is a heavy increase in variance. For example, The Small OLS CV ratio at degrees 1, 3 and 12 is 2.30, 1.06 and 2.06, with a 90th percentile of 13.3 at degree 12. Compared to Ridge at degree 12 which is 1.10, the small OLS has way high variance. The train ratios for small OLS at degrees 1,3 and 12 are 2.20, 0.97 and 0.83, respectively. 
 
 ## Limitations 
-There is only one cubic with true coefs of [8,6,4,0.3], range of x being 0-20 and a noise of 200. The x range sets the column scale gap. Other ranges aren't tested in this experiment. A different range could make the rankings different, for example, maybe scale first ranks first instead of scale_afterpoly. Every pipeline uses only degree 9 vs a true degree of 3. Other degrees are untested so a higher or lower degree, for example in a lower degree the model could underfit on the data. In the 2 sample sizes the gap was 0.39% on the big dataset for scale_after poly and 3.55% vs. scale_both. The gap for scale_after poly is 0.74% vs 9.8% for scale first. Since there were only 2 samples how the gap scales isn't known, for example lets say there was a dataset with 300 samples and the gap could be less than the dataset with 500 samples. It is a possibility but not currently known. The experiment is run only on synthetic data so if it were on a real dataset then the results can be completely different. A real dataset has multiple features and varying ranges so it can change the rankings of the scalar placements. Only ridge, standardscalar and raw power basis were used, the include_bias results was inert and things like splines or other penalties like lasso weren't tried. For example, these rankings could be a result of using ridge so if other penalties were tried than the rankings could change. The seed runs only ran the data generation and splitter across multiple seeds, the train/test split stayed at seed=42 so train test split variability wasn't sampled but after applying the fixes it is now sampled so this is no longer a limitation. No actual multiple comparison correction was applied.  Alpha selection in some pipelines was optimistic because in scale_first and scale_both because some rmses at different alphas below the train set floor. If some things were to change the best alpha chosen can be different. Test RMSE doesn't rank anything instead the ranks are determined by cv_rmse and seed runs. If ranked on test RMSE the results can be different. The alpha grid runs from 1e-4 to 1e3 for 50 points. Some models like the big dataset base model sit the the alpha grids edge and the small dataset pipelines are close to the alphas grid edge for best alpha. If the grid was extended downwards the best alpha could change for some of the models. Seed 42 has a noise floor of 145 when it's 200 for the seed runs so the figures can't really be generalized. If the noise floor was closer to 200 the results can be different. The raw power columns are highly collinear so a result at a small alpha carry numerical error. If there is a change in alpha the prediction difference for bias can change a lot. Unit variance columns don't seperate scale_afterpoly from scale_both since the condition numbers are the other way because scale_both is better conditioned than scale_afterpoly. Overall the cause remains an open question. The placements are ranked on 1 metric CV RMSE which is the mean of fold RMSE's in this experiment. Other metrics like MAE or a pooled RMSE could order the pipelines differently. The rerun with noise = 300 and adding train/test split variability across in the fixes section is only tested on n=500 it's not run on the small dataset/n=60. One test was run on seed_results.py to compare the seed list length and tested if it threw an error but tests on the means, rankings and printing logic weren't run. The 100% kill rate on mutants come from author written mutants (there was also a 100% kill rate on machine generated mutants from cosmic-ray so this isn't a limiation anymore).
-
+There is only one cubic with true coefs of [8,6,4,0.3], range of x being 0-20 and a noise of 200. The x range sets the column scale gap. Other ranges aren't tested in this experiment. A different range could make the rankings different, for example, maybe scale first ranks first instead of scale_afterpoly. In the 2 sample sizes the gap was 0.39% on the big dataset for scale_after poly and 3.55% vs. scale_both. The gap for scale_after poly is 0.74% vs 9.8% for scale first. Since there were only 2 samples how the gap scales isn't known, for example lets say there was a dataset with 300 samples and the gap could be less than the dataset with 500 samples. It is a possibility but not currently known. The experiment is run only on synthetic data so if it were on a real dataset then the results can be completely different. A real dataset has multiple features and varying ranges so it can change the rankings of the scalar placements. Only ridge, standardscalar and raw power basis were used, the include_bias results was inert and things like splines or other penalties like lasso weren't tried. For example, these rankings could be a result of using ridge so if other penalties were tried than the rankings could change. The seed runs only ran the data generation and splitter across multiple seeds, the train/test split stayed at seed=42 so train test split variability wasn't sampled but after applying the fixes it is now sampled so this is no longer a limitation. No actual multiple comparison correction was applied.  Alpha selection in some pipelines was optimistic because in scale_first and scale_both because some rmses at different alphas below the train set floor. If some things were to change the best alpha chosen can be different. Test RMSE doesn't rank anything instead the ranks are determined by cv_rmse and seed runs. If ranked on test RMSE the results can be different. The alpha grid runs from 1e-4 to 1e3 for 50 points. Some models like the big dataset base model sit the the alpha grids edge and the small dataset pipelines are close to the alphas grid edge for best alpha. If the grid was extended downwards the best alpha could change for some of the models. Seed 42 has a noise floor of 145 when it's 200 for the seed runs so the figures can't really be generalized. If the noise floor was closer to 200 the results can be different. The raw power columns are highly collinear so a result at a small alpha carry numerical error. If there is a change in alpha the prediction difference for bias can change a lot. Unit variance columns don't seperate scale_afterpoly from scale_both since the condition numbers are the other way because scale_both is better conditioned than scale_afterpoly. Overall the cause remains an open question. The placements are ranked on 1 metric CV RMSE which is the mean of fold RMSE's in this experiment. Other metrics like MAE or a pooled RMSE could order the pipelines differently. The rerun with noise = 300 and adding train/test split variability across in the fixes section is only tested on n=500 it's not run on the small dataset/n=60. One test was run on seed_results.py to compare the seed list length and tested if it threw an error but tests on the means, rankings and printing logic weren't run. The 100% kill rate on mutants come from author written mutants (there was also a 100% kill rate on machine generated mutants from cosmic-ray so this isn't a limiation anymore). The tolerance is at 1e-12 which is about 70x lower than lowest sigular value found. The CV-Train Ratio has a heavy tail because the median at degree 12 is 0.029579 and the 90th percentile is 12.448633. Also for CV Ratio because it has a median at degree 12 of 2.05817 with a 90th percentile of 13.280482. The degree sweep was only tested at a noise level of 200 so a different noise level could yield different results. The dirty tree column in result table of degree sweep is still all true even after commiting and rerunning the sweep multiple times. 
 ## Fixes
 
 ### Pipeline Results
@@ -187,13 +221,14 @@ This is a rerun of n=500 not n=60. Another sweep was ran through poly_ex.py and 
 
 ### Software versions
 
-- Python: 3.14.4
-- NumPy: 2.5.4 (np.bool is used for numpy 2 or later. The 3 .reshape(-2) and reshape(~1) survivors are specifc to this version)
-- SciPy: 1.18.1
-- scikit-learn: 1.9.1
-- Matplotlib: 3.11.2
-- pytest: 9.1.1
-(These were the versions that generated the numbers)
+| Software | Version | Notes |
+|---|---:|---|
+| Python | 3.14.4 | Generated the reported values |
+| NumPy | 2.5.4 | `np.bool` is used for NumPy 2 or later; reshape `-2` and `~1` survivors are specific to this version |
+| SciPy | 1.18.1 | Generated the reported values |
+| scikit-learn | 1.9.1 | Generated the reported values |
+| Matplotlib | 3.11.2 | Generated the reported values |
+| pytest | 9.1.1 | Expanded suite passed with 114 tests |
 
 ### Experiment settings
 
@@ -202,7 +237,7 @@ The alpha grid for every run was `np.logspace(-4, 3, 50)` (50 values from
 negative root mean squared error as the scoring metric. The train/test split
 used a 20% test fraction.
 
-Exception rule: The contract for alpha values is that it will be TypeError for non real finite scalar values and ValueError for negative finite scalars. A bad type of input like inf or nan will raise a TypeError which is different from Scikit-learn's ValueError for those inputs.    
+Exception rule: The contract for alpha values is that it will be TypeError for non real finite scalar values and ValueError for negative finite scalars. A type of input different from a finite scale like inf or nan will raise a TypeError which is different from Scikit-learn's ValueError for those inputs. Source: [https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.Ridge.html]
 
 | Run | Noise setting | n | Degree |
 |---|---:|---:|---:|
@@ -228,7 +263,15 @@ multi-seed rerun's per-run seeds are listed below.
 | `seed_runs.py` | `--t_seeds` | 20 values | Train/test split seeds, paired by position with the other seed lists. |
 | `seed_runs.py` | `--n` | `500` | Sets the sample count |
 
-Testing command: `python mutant_harness.py`
+| Purpose | Command |
+|---|---|
+| Mutation harness | `python mutant_harness.py` |
+| Original seed runs | `python seed_results.py --t_seeds 42` |
+| Small-dataset seed runs | `python seed_results.py --t_seeds 42 --n 60` |
+| Original polynomial experiment | `python poly_ex.py` |
+| Fixed polynomial experiment at noise 300 | `python poly_ex.py --noise 300` |
+| Fixed seed-runs experiment at noise 300 | `python seed_results.py --noise 300` |
+| Full test suite | `python -m pytest -q tests/` |
 
 The harness executes supported mutations from the historical mutation matrix
 against the current tests, reports executed/killed/survived/stale counts, and
@@ -247,9 +290,11 @@ Fixes poly: `python poly_ex.py --noise 300`
 Fixes seedruns: `python seed_results.py --noise 300`
 
 
-Data seeds: [46,54,23,19,38,20,67,49,32,99,35,81,72,15,4,89,64,12,1,69]
-Splitter seeds: [86,43,69,54,23,27,52,82,12,92,74,62,40,68,43,82,78,13,3,59]
-Train/test split seeds: [8, 63, 27, 91, 44, 12, 76, 35, 58, 3, 84, 19, 67, 50, 29, 100, 6, 72, 41, 95] 
+| Seed list | Values |
+|---|---|
+| Data seeds | 46, 54, 23, 19, 38, 20, 67, 49, 32, 99, 35, 81, 72, 15, 4, 89, 64, 12, 1, 69 |
+| Splitter seeds | 86, 43, 69, 54, 23, 27, 52, 82, 12, 92, 74, 62, 40, 68, 43, 82, 78, 13, 3, 59 |
+| Train/test split seeds | 8, 63, 27, 91, 44, 12, 76, 35, 58, 3, 84, 19, 67, 50, 29, 100, 6, 72, 41, 95 |
 
 
 ## Addressing Surviving Mutants
@@ -300,4 +345,4 @@ empty; each makes the expected-value assertions fail. The separate
 | `rank_pipelines` (`src/seed_runs.py`) | `ReplaceComparisonOperator_Gt_NotEq`: `len(temp) > 0` → `len(temp) != 0` | 58 | A length cannot be negative. |
 | `seed_pipeline_results` (`src/seed_runs.py`) | `NumberReplacer`: winner index `[0]` → `[-1]` | 30 | This branch runs only when there is exactly one winner. |
 
-The expanded test suite passes: 114 tests passed.
+The expanded test suite passes: 146 tests passed.

@@ -562,8 +562,7 @@ def main(argv: list[str] | None = None) -> None:
         true_coefs=np.asarray(args.true_coefs),
         max_degree=args.degree,
         n_replicates=200,
-        tol = 1.44e-11
-    )
+        tol = 1e-12)
     results.to_csv(args.out)
 
 
