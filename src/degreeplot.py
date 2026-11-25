@@ -272,9 +272,10 @@ def main() -> None:
     if args.out:
         comparison_df.to_csv(args.out, index=False)
 
-    plt.show()
+    
     if args.save:
         fig.savefig(args.save)
+    plt.show()
 
 
 if __name__ == "__main__":

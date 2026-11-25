@@ -1,0 +1,30 @@
+# SQL Databases
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+
+# Images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.tif
+*.webp
+*.svg
+*.ico
+*.heic
+
+# HTML & Web
+*.html
+*.htm
+
+# Data & Spreadsheets
+*.csv
+*.xlsx
+
+*.toml
+*.pyc
+*.json

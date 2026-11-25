@@ -1,5 +1,5 @@
 import numpy as np
-
+from sklearn.linear_model import LinearRegression
 rng = np.random.default_rng(42)
 X = rng.standard_normal(size=1_000_000)
 
