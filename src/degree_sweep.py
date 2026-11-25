@@ -1,295 +1,570 @@
+from dataclasses import dataclass
 import argparse
+import hashlib
+from pathlib import Path
+import subprocess
+
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+from sklearn.base import clone
+from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.model_selection import KFold, train_test_split, validation_curve
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import PolynomialFeatures, StandardScaler
+from numpy.polynomial.polynomial import polyval
+from poly import build_pipelines, make_poly_data, placement
 
 
-PREDICTIONS = {
-    ("Small", "LinearRegression"): {
-        1: (2.862666540432592, 2.880993384165788),
-        3: (0.9459053029269173, 1.0513149660756935),
-        12: (0.8111071056538127, 1.1584926685818493),
-    },
-    ("Big", "LinearRegression"): {
-        9: (0.9842509842514764, 1.015504800579495),
-    },
-    ("Small", "Ridge"): {
-        12: (0.8111071056538127, 1.1584926685818493),
-    },
-    ("Big", "Ridge"): {
-        12: (0.9794769012079866, 1.0201102881551583),
-    },
-}
-
-
-def make_curve(df: pd.DataFrame) -> pd.DataFrame:
+def generate_seed_triplets(master_seed: int, n_replicates: int) -> list[tuple[int, int, int]]:
     """
-    Use to make a dataframe containing the Ratios from the floor and the degrees.
+    Generate train/test, splitter, and data seeds for each replicate.
+
     Parameters:
-        df: Dataframe from a degree sweep.
+        master_seed: SeedSequence entropy used to initialize the replicates.
+        n_replicates: Number of replicate seed triplets to generate.
+
     Returns:
-        DataFrame: Contains Degrees, CV, Train and CV-Train Ratios
+        list[tuple[int, int, int]]: Per-replicate train/test, splitter, and data
+            seeds, in that order.
+
+    Raises:
+        ValueError: If n_replicates is negative.
     """
-    data = pd.concat(
-        [
-            df["Degree"],
-            df["CV RMSE"] / df["Floor"],
-            df["Train RMSE"] / df["Floor"],
-            df["CV RMSE"] / df["Floor"] - df["Train RMSE"] / df["Floor"],
-        ],
-        axis=1,
+    seed_sequences = np.random.SeedSequence(master_seed).spawn(n_replicates)
+    return [
+        tuple(int(seed) for seed in seed_sequence.generate_state(3))
+        for seed_sequence in seed_sequences
+    ]
+
+
+def current_git_metadata() -> tuple[str, bool]:
+    """
+    Return the HEAD hash and whether the working tree has changes.
+
+    Returns:
+        tuple[str, bool]: Full HEAD hash and a dirty-working-tree flag.
+
+    Raises:
+        subprocess.CalledProcessError: If Git cannot resolve the repository or status.
+        FileNotFoundError: If the Git executable is unavailable.
+    """
+    repository_root = Path(__file__).resolve().parent.parent
+    commit_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository_root,
+        check=True,
+        capture_output=True,
+        text=True,
     )
-    data.columns = ["Degree", "CV Ratio", "Train Ratio", "CV-Train"]
-    return data
+    status_result = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=normal"],
+        cwd=repository_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return commit_result.stdout.strip(), bool(status_result.stdout.strip())
 
 
-def make_curve_plot(estimator: str, curve: pd.DataFrame, ax) -> None:
+def hash_arrays(*arrays: np.ndarray) -> str:
     """
-    Make a degree sweep curve plot.
+    Hash multiple arrays while preserving their boundaries, shapes, and dtypes.
+
     Parameters:
-        estimator: name of the type of estimator used
-        curve: Dataframe containing Ratios and Degree to plot with.
-        ax: what axis to plot on
-        ct: the color for the line of train curve
-        ccv: color of the line of the CV curve
+        *arrays: Arrays to include in the digest.
+
+    Returns:
+        str: Hexadecimal SHA-256 digest.
     """
-    X = np.sort(curve["Degree"].unique())
-    gbd_curve = curve.groupby("Degree")
-    line = ax.plot(X, gbd_curve["CV Ratio"].median(), label=f"{estimator} CV Ratio")
-    line2 = ax.plot(
-        X, gbd_curve["Train Ratio"].median(), label=f"{estimator} Train Ratio"
-    )
-
-    ax.fill_between(
-        X,
-        gbd_curve["CV Ratio"].quantile(0.1),
-        gbd_curve["CV Ratio"].quantile(0.9),
-        color=line.get_color(),
-        alpha=0.4,
-    )
-    ax.fill_between(
-        X,
-        gbd_curve["Train Ratio"].quantile(0.1),
-        gbd_curve["Train Ratio"].quantile(0.9),
-        color=line2.get_color(),
-        alpha=0.4,
-    )
-
-    ax.grid(True)
-    ax.set_ylabel("Ratios From Floor")
-    ax.set_xlabel("Degree")
-    ax.set_yscale("log")
+    digest = hashlib.sha256()
+    digest.update(len(arrays).to_bytes(8, byteorder="big"))
+    for array in arrays:
+        contiguous = np.ascontiguousarray(array)
+        digest.update(contiguous.dtype.str.encode("ascii"))
+        digest.update(repr(contiguous.shape).encode("ascii"))
+        digest.update(contiguous.tobytes())
+    return digest.hexdigest()
 
 
-def graph_cv_train_gaps(estimator: str, curve: pd.DataFrame, ax) -> None:
+def hash_array(array: np.ndarray) -> str:
     """
-    Graphs CV-Train Ratio.
+    Hash an array's shape, dtype, and contiguous byte representation.
+
     Parameters:
-        estimator: name of estimator used
-        curve: Dataframe containing Degree and Ratios to plot with
-        ax: what axis to plot on
+        array: NumPy array to hash.
+
+    Returns:
+        str: Hexadecimal SHA-256 digest.
     """
-    X = np.sort(curve["Degree"].unique())
-    gbd_curve = curve.groupby("Degree")
-    line =ax.plot(X, gbd_curve["CV-Train"].median(), label=f"{estimator} CV-Train Ratio")
-    ax.fill_between(
-        X,
-        gbd_curve["CV-Train"].quantile(0.1),
-        gbd_curve["CV-Train"].quantile(0.9),
-        color = line.get_color()
-        alpha=0.4,
-    )
-    ax.grid(True)
-    ax.set_ylabel("Ratios From Floor")
-    ax.set_xlabel("Degree")
-    ax.set_yscale("log")
+    return hash_arrays(array)
 
 
-def compute_prediction_percentile(
-    replicate_values: np.ndarray, prediction: float
-) -> dict:
+def hash_cv_folds(folds: list[tuple[np.ndarray, np.ndarray]]) -> str:
     """
-    Compute the empirical percentile (with mid-rank tie handling) and 10th-90th
-    percentile band result for a single prediction against replicate values.
+    Hash the ordered train/validation indices for every CV fold.
+
+    Parameters:
+        folds: Ordered pairs of training and validation index arrays.
+
+    Returns:
+        str: Hexadecimal SHA-256 digest of all fold indices.
     """
-    values = np.asarray(replicate_values, dtype=float)
-    if values.size == 0:
-        raise ValueError("replicate_values must not be empty.")
+    return hash_arrays(*(indices for fold in folds for indices in fold))
 
-    band_low, band_high = np.quantile(values, [0.1, 0.9])
-    below_prediction = np.count_nonzero(values < prediction)
-    equal_prediction = np.count_nonzero(values == prediction)
-    prediction_percentile = (
-        100.0 * (below_prediction + 0.5 * equal_prediction) / len(values)
-    )
-    result = "Miss" if prediction < band_low or prediction > band_high else "Not miss"
 
+def make_replicate_datasets(
+    poly_data_seed: int, true_coefs: np.ndarray, noise: float
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """
+    Generate both dataset sizes once for one replicate.
+
+    Parameters:
+        poly_data_seed: Random seed shared by the generated datasets.
+        true_coefs: Polynomial coefficients used to generate targets.
+        noise: Standard deviation of added Gaussian noise.
+
+    Returns:
+        dict[str, tuple[np.ndarray, np.ndarray]]: Big and Small (X, y) datasets.
+    """
     return {
-        "Prediction Percentile": float(prediction_percentile),
-        "Replicate Count": int(len(values)),
-        "Replicate Band Low (10th percentile)": float(band_low),
-        "Replicate Band High (90th percentile)": float(band_high),
-        "Result": result,
+        "Big": make_poly_data(
+            n=500,
+            x_low=0,
+            x_high=20,
+            true_coefs=true_coefs,
+            seed=poly_data_seed,
+            noise=noise,
+        ),
+        "Small": make_poly_data(
+            n=60,
+            x_low=0,
+            x_high=20,
+            true_coefs=true_coefs,
+            seed=poly_data_seed,
+            noise=noise,
+        ),
     }
 
 
-def evaluate_predictions(
-    actual_curves: dict[tuple[str, str], pd.DataFrame],
-    predictions: dict[tuple[str, str], dict[int, tuple[float, float]]],
+def train_test_indices(n_samples: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Generate deterministic 80/20 train/test indices.
+
+    Parameters:
+        n_samples: Number of rows in the dataset.
+        seed: Random state used for the split.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: Training and test row indices.
+    """
+    return train_test_split(
+        np.arange(n_samples), train_size=0.8, random_state=seed
+    )
+
+
+def curve_scores(curve: tuple[np.ndarray, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Average training and validation scores across folds per parameter value.
+
+    Parameters:
+        curve: Training and validation score arrays from sklearn's
+            validation_curve, each shaped (parameter values, folds).
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: Positive mean training and validation
+            RMSE values.
+    """
+    return -np.mean(curve[0], axis=1), -np.mean(curve[1], axis=1)
+
+
+def mean_fold_rmse(residuals: np.ndarray, folds: list[tuple[np.ndarray, np.ndarray]]) -> float:
+    """
+    Average the residual RMSE over a supplied set of validation folds.
+
+    Parameters:
+        residuals: Per-row residuals for the training dataset.
+        folds: Ordered train/validation index pairs.
+
+    Returns:
+        float: Mean RMSE across the supplied validation folds.
+    """
+    fold_rmses = [
+        np.sqrt(np.mean(residuals[validation_indices] ** 2))
+        for _, validation_indices in folds
+    ]
+    return float(np.mean(fold_rmses))
+
+
+
+def effective_df(model, X_train: np.ndarray, y_train: np.ndarray) -> float:
+    """
+    Calculate effective degrees of freedom from a model's training design.
+
+    Parameters:
+        model: Pipeline ending in LinearRegression or Ridge.
+        X_train: Training features used to build the design matrix.
+        y_train: Training targets passed to the preprocessing steps.
+
+    Returns:
+        float: Design-matrix rank for LinearRegression or effective Ridge
+            degrees of freedom, including its unpenalized intercept.
+
+    Raises:
+        TypeError: If the pipeline's final estimator is not LinearRegression
+            or Ridge.
+    """
+    transformed = clone(model[:-1]).fit_transform(X_train, y_train)
+    estimator = model[-1]
+
+    if isinstance(estimator, LinearRegression):
+        design = np.column_stack((np.ones(transformed.shape[0]), transformed))
+        return float(np.linalg.matrix_rank(design))
+    if isinstance(estimator, Ridge):
+        centered = transformed - transformed.mean(axis=0)
+        if estimator.alpha == 0:
+            return float(1 + np.linalg.matrix_rank(centered))
+        singular_values = np.linalg.svd(centered, compute_uv=False)
+        return float(
+            1 + np.sum(
+                singular_values**2 / (singular_values**2 + estimator.alpha)
+            )
+        )
+    raise TypeError("Effective degrees of freedom are supported for LinearRegression and Ridge.")
+
+
+def mean_cv_effective_df(
+    model, parameter: str, degree: int, X: np.ndarray, y: np.ndarray, cv
+) -> float:
+    """
+    Average effective degrees of freedom over CV training folds.
+
+    Parameters:
+        model: Pipeline ending in LinearRegression or Ridge.
+        parameter: Pipeline parameter name to set for the requested degree.
+        degree: Degree value assigned to the specified model parameter.
+        X: Features passed to the cross-validation splitter.
+        y: Targets passed to the cross-validation splitter.
+        cv: Cross-validation splitter providing train/test index pairs.
+
+    Returns:
+        float: Mean effective degrees of freedom across training folds.
+    """
+    fold_dfs = []
+    fold_model = clone(model).set_params(**{parameter: degree})
+    for train_indices, _ in cv.split(X, y):
+        fold_dfs.append(effective_df(fold_model, X[train_indices], y[train_indices]))
+    return float(np.mean(fold_dfs))
+
+
+def max_degree_fold_rank_metadata(
+    model,
+    parameter: str,
+    degree: int,
+    X: np.ndarray,
+    y: np.ndarray,
+    folds: list[tuple[np.ndarray, np.ndarray]],
+    tol: float,
+    dataset: str,
+) -> tuple[float, float, float]:
+    """Return min singular value, min singular-value ratio, and ratio-minus-tol."""
+    smallest_singular_values = []
+    singular_value_ratios = []
+
+    for fold_number, (train_indices, _) in enumerate(folds, start=1):
+        fold_model = clone(model).set_params(**{parameter: degree})
+        fold_model.fit(X[train_indices], y[train_indices])
+        rank = int(fold_model[-1].rank_)
+        features = fold_model[:-1].transform(X[train_indices])
+        nonconstant = np.any(features != features[0], axis=0)
+        expected_rank = int(np.count_nonzero(nonconstant))
+        if rank != expected_rank:
+            raise RuntimeError(
+                f"OLS rank {rank} does not match the number of non-constant "
+                f"transformed columns ({expected_rank}) for {dataset} degree "
+                f"{degree}, CV fold {fold_number}; use a smaller tol."
+            )
+
+        centered_features = features[:, nonconstant]
+        centered_features = centered_features - centered_features.mean(axis=0)
+        singular_values = np.linalg.svd(centered_features, compute_uv=False)
+        minimum_singular_value = float(singular_values[-1])
+        observed_ratio = minimum_singular_value / float(singular_values[0])
+        if observed_ratio <= tol:
+            raise RuntimeError(
+                f"OLS rank margin is not positive for {dataset} degree {degree}, "
+                f"CV fold {fold_number}: minimum singular-value ratio "
+                f"{observed_ratio} is not greater than tol {tol}."
+            )
+        smallest_singular_values.append(minimum_singular_value)
+        singular_value_ratios.append(observed_ratio)
+
+    minimum_observed_ratio = min(singular_value_ratios)
+    return (
+        min(smallest_singular_values),
+        minimum_observed_ratio,
+        minimum_observed_ratio/tol,
+    )
+
+
+@dataclass(frozen=True)
+class SweepResult:
+    """Typed record for one dataset, estimator, and degree result."""
+
+    train_test_seed: int
+    splitter_seed: int
+    poly_data_seed: int
+    dataset: str
+    degree: int
+    estimator: str
+    train_rmse: float
+    cv_rmse: float
+    floor: float
+    condition_num: float
+    effective_df: float
+    replicate: int
+    y_hash: str
+    validation_input_hash: str
+    train_test_split_hash: str
+    cv_fold_hash: str
+    master_seed: int
+    commit_hash: str
+    working_tree_dirty: bool
+    rank: int
+    minimum_genuine_singular_value: float
+    minimum_observed_ratio: float
+    rank_margin: float
+
+    def as_row(self) -> dict[str, object]:
+        """Return this record as one results-table row."""
+        return {
+            "Train Test seed": self.train_test_seed,
+            "Splitter seed": self.splitter_seed,
+            "Poly Data Seed": self.poly_data_seed,
+            "Dataset": self.dataset,
+            "Degree": self.degree,
+            "Estimator": self.estimator,
+            "Train RMSE": self.train_rmse,
+            "CV RMSE": self.cv_rmse,
+            "Floor": self.floor,
+            "Condition Number": self.condition_num,
+            "Effective DF": self.effective_df,
+            "Replicate": self.replicate,
+            "Y SHA256": self.y_hash,
+            "Validation Input SHA256": self.validation_input_hash,
+            "Train/Test Split SHA256": self.train_test_split_hash,
+            "CV Fold Indices SHA256": self.cv_fold_hash,
+            "Master Seed": self.master_seed,
+            "Commit Hash": self.commit_hash,
+            "Working Tree Dirty": self.working_tree_dirty,
+            "Rank": self.rank,
+            "Minimum Genuine Singular Value": self.minimum_genuine_singular_value,
+            "Minimum Observed Ratio": self.minimum_observed_ratio,
+            "Rank Margin": self.rank_margin,
+        }
+
+
+def run_degree_sweep(
+    alpha: float,
+    master_seed: int,
+    noise: float,
+    true_coefs: np.ndarray,
+    max_degree: int,
+    tol: float,
+    n_replicates: int = 50,
+    n_jobs: int = 1,
 ) -> pd.DataFrame:
     """
-    Evaluate predicted Train Ratio, CV Ratio, and CV-Train gap values against
-    empirical replicate distributions for each (Dataset, Estimator, Degree).
+    Run the degree sweep and return rows for every dataset/model/degree.
+
+    Parameters:
+        alpha: Ridge regularization strength.
+        master_seed: Seed used to derive each replicate's seed triplet.
+        noise: Standard deviation of generated target noise.
+        true_coefs: Coefficients used to generate polynomial targets.
+        max_degree: Highest polynomial degree included in the sweep.
+        n_replicates: Number of independent replicates to run.
+        n_jobs: Parallel jobs passed to sklearn's validation_curve.
+        tol: Tolerance used by the unregularized LinearRegression estimator.
+
+    Returns:
+        pd.DataFrame: Results and reproducibility metadata for all runs.
+    Raises:
+        ValueError: If alpha is negative or non-finite, noise is non-positive or
+            non-finite, n_replicates or max_degree is not a positive integer,
+            or the polynomial design saturates the smallest CV training fold.
+        RuntimeError: If any maximum-degree CV fold has an OLS rank mismatch or
+            a non-positive margin above the rank tolerance.
+        TypeError: If alpha or noise is not numeric.
+        subprocess.CalledProcessError: If Git cannot resolve the repository
+            commit or working-tree status.
+        FileNotFoundError: If the Git executable is unavailable.
     """
-    comparison_rows = []
-    for (dataset, estimator), degree_predictions in predictions.items():
-        curve = actual_curves[(dataset, estimator)]
-        for degree, (train_prediction, cv_prediction) in degree_predictions.items():
-            actual_rows = curve[curve["Degree"] == degree]
-            if actual_rows.empty:
-                raise ValueError(
-                    f"No actual ratios found for {dataset} {estimator} degree {degree}."
-                )
-            actual_ratios = actual_rows[
-                ["CV Ratio", "Train Ratio", "CV-Train"]
-            ].median()
-            ratio_predictions = {
-                "CV Ratio": cv_prediction,
-                "Train Ratio": train_prediction,
-                "CV-Train": cv_prediction - train_prediction,
-            }
-            for ratio, prediction in ratio_predictions.items():
-                stats = compute_prediction_percentile(
-                    actual_rows[ratio].to_numpy(dtype=float), prediction
-                )
-                comparison_rows.append(
-                    {
-                        "Dataset": dataset,
-                        "Estimator": estimator,
-                        "Degree": degree,
-                        "Ratio": ratio,
-                        "Prediction": prediction,
-                        "Actual": actual_ratios[ratio],
-                        **stats,
-                    }
-                )
-    return pd.DataFrame(comparison_rows)
+    if not np.isfinite(alpha) or alpha < 0:
+        raise ValueError("alpha must be finite and non-negative.")
+    if not np.isfinite(noise) or noise <= 0:
+        raise ValueError("noise must be finite and greater than zero.")
+    if isinstance(n_replicates, bool) or not isinstance(n_replicates, (int, np.integer)) or n_replicates < 1:
+        raise ValueError("n_replicates must be a positive integer.")
+    if isinstance(max_degree, bool) or not isinstance(max_degree, (int, np.integer)) or max_degree < 1:
+        raise ValueError("max_degree must be a positive integer.")
 
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--csv",
-        type=str,
-        default="results.csv",
-        help="The file the degree sweep results are from",
+    small_train_size = int(60 * 0.8)
+    smallest_fold_train_size = min(
+        len(train_indices)
+        for train_indices, _ in KFold(5).split(np.empty(small_train_size))
     )
-    parser.add_argument("--out", type=str, help="Writes a csv file to the specified path")
-    parser.add_argument(
-        "--save", type=str, help="Save the fig to a specified image path"
-    )
-    args = parser.parse_args()
-
-    df = pd.read_csv(args.csv, index_col=0)
-    Big_LS = df[(df["Estimator"] == "LinearRegression") & (df["Dataset"] == "Big")]
-    Big_R = df[(df["Estimator"] == "Ridge") & (df["Dataset"] == "Big")]
-    Small_LS = df[
-        (df["Dataset"] == "Small") & (df["Estimator"] == "LinearRegression")
-    ]
-    Small_R = df[(df["Estimator"] == "Ridge") & (df["Dataset"] == "Small")]
-
-    Big_LS_curves = make_curve(Big_LS)
-    Big_R_curves = make_curve(Big_R)
-    Small_LS_curves = make_curve(Small_LS)
-    Small_R_curves = make_curve(Small_R)
-
-    fig, axs = plt.subplots(1, 3, figsize=(18, 6))
-    axs[0].axhline(1, label="Floor: 1", linestyle="--", color="grey")
-    make_curve_plot("Big LS", Big_LS_curves, axs[0])
-    make_curve_plot("Big R", Big_R_curves, axs[0])
-    axs[0].set_title("Big Dataset Ratio Curves")
-
-    axs[1].axhline(1, label="Floor: 1", linestyle="--", color="grey")
-    make_curve_plot("Small LS", Small_LS_curves, axs[1])
-    make_curve_plot("Small R", Small_R_curves, axs[1])
-    axs[1].set_title("Small Dataset Ratio Curves")
-
-    graph_cv_train_gaps("Big LS", Big_LS_curves, axs[2])
-    graph_cv_train_gaps("Big Ridge", Big_R_curves, axs[2])
-    graph_cv_train_gaps("Small LS", Small_LS_curves, axs[2])
-    graph_cv_train_gaps("Small Ridge", Small_R_curves, axs[2])
-    axs[2].set_title("CV-Train Gaps")
-
-    # Distinct marker styles and zorders prevent overlapping predictions from hiding one another
-    marker_styles = {
-        ("LinearRegression", "Big"): ("o", 7, 10, "tab:blue"),
-        ("LinearRegression", "Small"): ("o", 7, 10, "tab:blue"),
-        ("Ridge", "Big"): ("s", 5, 8, "tab:orange"),
-        ("Ridge", "Small"): ("^", 6, 12, "tab:green"),
-    }
-
-    for (dataset, estimator), degree_predictions in PREDICTIONS.items():
-        ax = axs[0] if dataset == "Big" else axs[1]
-        marker, markersize, zorder, color = marker_styles.get(
-            (estimator, dataset), ("o", 6, 10, None)
+    if max_degree + 1 >= smallest_fold_train_size:
+        raise ValueError(
+            "max_degree + 1 must be smaller than the smallest CV training-fold size "
+            f"({smallest_fold_train_size})."
         )
-        degrees = list(degree_predictions)
-        train_predictions = [degree_predictions[degree][0] for degree in degrees]
-        cv_predictions = [degree_predictions[degree][1] for degree in degrees]
-        gap_predictions = [
-            degree_predictions[degree][1] - degree_predictions[degree][0]
-            for degree in degrees
-        ]
-        ax.plot(
-            degrees,
-            train_predictions,
-            marker=marker,
-            linestyle="None",
-            markersize=markersize,
-            zorder=zorder,
-            color=color,
-            label=f"{dataset} {estimator} Train Ratio predictions",
-        )
-        ax.plot(
-            degrees,
-            cv_predictions,
-            marker=marker,
-            linestyle="None",
-            markersize=markersize,
-            zorder=zorder,
-            color=color,
-            label=f"{dataset} {estimator} CV Ratio predictions",
-        )
-        axs[2].plot(
-            degrees,
-            gap_predictions,
-            marker=marker,
-            linestyle="None",
-            markersize=markersize,
-            zorder=zorder,
-            color=color,
-            label=f"{dataset} {estimator} CV-Train Gap predictions",
-        )
+    commit_hash, working_tree_dirty = current_git_metadata()
+    result_rows = []
+    degrees = np.arange(1, max_degree + 1)
 
-    axs[0].legend()
-    axs[1].legend()
-    axs[2].legend()
-    fig.tight_layout()
+    seed_triplets = generate_seed_triplets(master_seed, n_replicates)
+    for replicate, (train_test_seed, split_seed, poly_seed) in enumerate(seed_triplets):
+        datasets = make_replicate_datasets(poly_seed, true_coefs, noise)
+        splitter = KFold(5, shuffle=True, random_state=split_seed)
+        least_squares = Pipeline([
+            ("poly", PolynomialFeatures()),
+            ("scale", StandardScaler()),
+            ("linreg", LinearRegression(tol=tol)),
+        ])
+        ridge = build_pipelines(1)["scale_afterpoly"]
+        ridge.set_params(ridge__alpha=alpha)
 
-    actual_curves = {
-        ("Small", "LinearRegression"): Small_LS_curves,
-        ("Big", "LinearRegression"): Big_LS_curves,
-        ("Small", "Ridge"): Small_R_curves,
-        ("Big", "Ridge"): Big_R_curves,
-    }
-    comparison_df = evaluate_predictions(actual_curves, PREDICTIONS)
-    if args.out:
-        comparison_df.to_csv(args.out, index=False)
+        for dataset, (X, y) in datasets.items():
+            y_hash = hash_array(y)
+            train_indices, test_indices = train_test_indices(len(y), train_test_seed)
+            X_train, y_train = X[train_indices], y[train_indices]
+            split_hash = hash_arrays(train_indices, test_indices)
+            folds = list(splitter.split(X_train, y_train))
+            fold_hash = hash_cv_folds(folds)
+            (
+                minimum_genuine_singular_value,
+                minimum_observed_ratio,
+                rank_margin
+            ) = max_degree_fold_rank_metadata(
+                least_squares,
+                "poly__degree",
+                int(max_degree),
+                X_train,
+                y_train,
+                folds,
+                tol,
+                dataset
+            )
+            residuals = y_train - polyval(X_train.ravel(), true_coefs)
+            floor = mean_fold_rmse(residuals, folds)
 
-    
-    if args.save:
-        fig.savefig(args.save)
-    plt.show()
+            model_specs = (
+                (least_squares, "poly__degree", "LinearRegression"),
+                (ridge, "polynomial__degree", "Ridge"),
+            )
+            for model, degree_parameter, estimator_name in model_specs:
+                validation_input_hash = hash_arrays(X_train, y_train)
+                curve = validation_curve(
+                    model,
+                    X_train,
+                    y_train,
+                    param_name=degree_parameter,
+                    param_range=degrees,
+                    cv=folds,
+                    scoring="neg_root_mean_squared_error",
+                    n_jobs=n_jobs,
+                )
+                train_scores, cv_scores = curve_scores(curve)
+                for index, degree in enumerate(degrees):
+                    degree_model = clone(model).set_params(
+                        **{degree_parameter: int(degree)}
+                    )
+
+                    if isinstance(degree_model[-1], LinearRegression):
+                        transformed = clone(degree_model).fit(X_train, y_train)
+                        rank = int(transformed[-1].rank_)
+                        features = transformed[:-1].transform(X_train)
+                        nonconstant_columns = int(
+                            np.count_nonzero(np.any(features != features[0], axis=0))
+                        )
+                        if rank != nonconstant_columns:
+                            raise RuntimeError(
+                                f"OLS rank {rank} does not match the number of "
+                                f"non-constant transformed columns "
+                                f"({nonconstant_columns}) for {dataset} degree "
+                                f"{degree}; use a smaller tol."
+                            )
+                    elif isinstance(degree_model[-1], Ridge):
+                        transformed = clone(degree_model[:-1]).fit_transform(X_train, y_train)
+                        rank = np.linalg.matrix_rank(transformed)
+
+                    _, condition_num, _ = placement(degree_model, X_train, y_train)
+                    if condition_num == 0:
+                        condition_num = np.nan
+                    result_rows.append(SweepResult(
+                        train_test_seed=int(train_test_seed),
+                        splitter_seed=int(split_seed),
+                        poly_data_seed=int(poly_seed),
+                        dataset=dataset,
+                        degree=int(degree),
+                        estimator=estimator_name,
+                        train_rmse=float(train_scores[index]),
+                        cv_rmse=float(cv_scores[index]),
+                        floor=float(floor),
+                        condition_num=float(condition_num),
+                        effective_df=mean_cv_effective_df(
+                            model,
+                            degree_parameter,
+                            int(degree),
+                            X_train,
+                            y_train,
+                            splitter,
+                        ),
+                        replicate=replicate,
+                        y_hash=y_hash,
+                        validation_input_hash=validation_input_hash,
+                        train_test_split_hash=split_hash,
+                        cv_fold_hash=fold_hash,
+                        master_seed=master_seed,
+                        commit_hash=commit_hash,
+                        working_tree_dirty=working_tree_dirty,
+                        rank=rank,
+                        minimum_genuine_singular_value=minimum_genuine_singular_value,
+                        minimum_observed_ratio=minimum_observed_ratio,
+                        rank_margin=rank_margin,
+                    ))
+
+    return pd.DataFrame([result.as_row() for result in result_rows])
+
+
+def main(argv: list[str] | None = None) -> None:
+    """
+    Parse command-line options, run the sweep, and write its results.
+
+    Parameters:
+        argv: Optional command-line argument list; defaults to sys.argv.
+
+    Returns:
+        None: Writes the results table to the requested output path.
+    """
+    parser = argparse.ArgumentParser(description="Degree Sweep")
+    parser.add_argument("--alpha", type=float, default=1e-3, help="Regularization strength for Ridge regression")
+    parser.add_argument("--entropy", type=int, default=42, help="Master seed for generating replicate seeds")
+    parser.add_argument("--noise", type=float, default=200, help="Noise level for polynomial data generation")
+    parser.add_argument("--true_coefs", type=float, nargs="+", default=[8, 6, 4, 0.3], help="Polynomial coefficients")
+    parser.add_argument("--out", type=str, default="results.csv", help="Path to write the resulting CSV")
+    parser.add_argument("--degree", type=int, default=12, help="Maximum polynomial degree")
+    args = parser.parse_args(argv)
+    results = run_degree_sweep(
+        alpha=args.alpha,
+        master_seed=args.entropy,
+        noise=args.noise,
+        true_coefs=np.asarray(args.true_coefs),
+        max_degree=args.degree,
+        n_replicates=200,
+        tol = 1e-12)
+    results.to_csv(args.out)
+
 
 if __name__ == "__main__":
     main()
