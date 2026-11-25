@@ -1,7 +1,7 @@
 import argparse
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 
 
 PREDICTIONS = {
@@ -21,15 +21,18 @@ PREDICTIONS = {
     },
 }
 
+# Module-level marker styles with distinct shapes and non-colliding colors
+# so prediction markers do not visually clash with curve colors (LS blue/orange, Ridge green/red).
+MARKER_STYLES = {
+    ("LinearRegression", "Big"): ("o", 7, 10, "purple"),
+    ("LinearRegression", "Small"): ("o", 7, 10, "purple"),
+    ("Ridge", "Big"): ("s", 6, 11, "brown"),
+    ("Ridge", "Small"): ("^", 6, 11, "brown"),
+}
+
 
 def make_curve(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Use to make a dataframe containing the Ratios from the floor and the degrees.
-    Parameters:
-        df: Dataframe from a degree sweep.
-    Returns:
-        DataFrame: Contains Degrees, CV, Train and CV-Train Ratios
-    """
+    """Use to make a dataframe containing the Ratios from the floor and the degrees."""
     data = pd.concat(
         [
             df["Degree"],
@@ -44,13 +47,7 @@ def make_curve(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def make_curve_plot(estimator: str, curve: pd.DataFrame, ax) -> None:
-    """
-    Make a degree sweep curve plot.
-    Parameters:
-        estimator: name of the type of estimator used
-        curve: Dataframe containing Ratios and Degree to plot with.
-        ax: what axis to plot on
-    """
+    """Make a degree sweep curve plot."""
     X = np.sort(curve["Degree"].unique())
     gbd_curve = curve.groupby("Degree")
     (line,) = ax.plot(X, gbd_curve["CV Ratio"].median(), label=f"{estimator} CV Ratio")
@@ -80,13 +77,7 @@ def make_curve_plot(estimator: str, curve: pd.DataFrame, ax) -> None:
 
 
 def graph_cv_train_gaps(estimator: str, curve: pd.DataFrame, ax) -> None:
-    """
-    Graphs CV-Train Ratio.
-    Parameters:
-        estimator: name of estimator used
-        curve: Dataframe containing Degree and Ratios to plot with
-        ax: what axis to plot on
-    """
+    """Graphs CV-Train Ratio."""
     X = np.sort(curve["Degree"].unique())
     gbd_curve = curve.groupby("Degree")
     ax.plot(X, gbd_curve["CV-Train"].median(), label=f"{estimator} CV-Train Ratio")
@@ -105,10 +96,6 @@ def graph_cv_train_gaps(estimator: str, curve: pd.DataFrame, ax) -> None:
 def compute_prediction_percentile(
     replicate_values: np.ndarray, prediction: float
 ) -> dict:
-    """
-    Compute the empirical percentile (with mid-rank tie handling) and 10th-90th
-    percentile band result for a single prediction against replicate values.
-    """
     values = np.asarray(replicate_values, dtype=float)
     if values.size == 0:
         raise ValueError("replicate_values must not be empty.")
@@ -134,10 +121,6 @@ def evaluate_predictions(
     actual_curves: dict[tuple[str, str], pd.DataFrame],
     predictions: dict[tuple[str, str], dict[int, tuple[float, float]]],
 ) -> pd.DataFrame:
-    """
-    Evaluate predicted Train Ratio, CV Ratio, and CV-Train gap values against
-    empirical replicate distributions for each (Dataset, Estimator, Degree).
-    """
     comparison_rows = []
     for (dataset, estimator), degree_predictions in predictions.items():
         curve = actual_curves[(dataset, estimator)]
@@ -217,17 +200,9 @@ def main() -> None:
     graph_cv_train_gaps("Small Ridge", Small_R_curves, axs[2])
     axs[2].set_title("CV-Train Gaps")
 
-    # Distinct marker styles and zorders prevent overlapping predictions from hiding one another
-    marker_styles = {
-        ("LinearRegression", "Big"): ("o", 7, 10, "tab:blue"),
-        ("LinearRegression", "Small"): ("o", 7, 10, "tab:blue"),
-        ("Ridge", "Big"): ("s", 5, 8, "tab:orange"),
-        ("Ridge", "Small"): ("^", 6, 12, "tab:green"),
-    }
-
     for (dataset, estimator), degree_predictions in PREDICTIONS.items():
         ax = axs[0] if dataset == "Big" else axs[1]
-        marker, markersize, zorder, color = marker_styles.get(
+        marker, markersize, zorder, color = MARKER_STYLES.get(
             (estimator, dataset), ("o", 6, 10, None)
         )
         degrees = list(degree_predictions)
@@ -283,10 +258,10 @@ def main() -> None:
     if args.out:
         comparison_df.to_csv(args.out, index=False)
 
-    plt.show()
+    
     if args.save:
         fig.savefig(args.save)
-
+    plt.show()
 
 if __name__ == "__main__":
     main()

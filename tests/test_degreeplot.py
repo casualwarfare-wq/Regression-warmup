@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from src.degreeplot import (
+    MARKER_STYLES,
     PREDICTIONS,
     compute_prediction_percentile,
     evaluate_predictions,
@@ -94,24 +95,21 @@ def test_evaluate_predictions_end_to_end_and_missing_degree():
         evaluate_predictions(actual_curves, bad_preds)
 
 
-def test_overlapping_predictions_have_distinct_visual_styles():
+def test_overlapping_predictions_have_distinct_visual_styles_from_module():
     """
-    Proves that when estimators share identical coordinate predictions
-    (such as Small LinearRegression and Small Ridge at degree 12),
-    their plotting styles (markers/zorders/colors) are distinct so that one
-    does not invisibly overlap and hide the other.
+    Imports MARKET_STYLES from degreeplot.py to test the live implementation,
+    verifying that estimators sharing identical coordinate predictions at degree 12
+    (Small LinearRegression and Small Ridge) use distinct marker shapes or colors
+    so they do not occlude each other.
     """
     ols_coords = PREDICTIONS[("Small", "LinearRegression")][12]
     ridge_coords = PREDICTIONS[("Small", "Ridge")][12]
 
-    # They share identical coordinates in PREDICTIONS as noted by the user
+    # Confirm the duplicate coordinate exists as specified
     assert ols_coords == ridge_coords
 
-    # Verify that different marker styles are assigned to prevent visual hiding
-    from src.degreeplot import marker_styles
+    ls_style = MARKER_STYLES[("LinearRegression", "Small")]
+    ridge_style = MARKER_STYLES[("Ridge", "Small")]
 
-    ls_style = marker_styles[("LinearRegression", "Small")]
-    ridge_style = marker_styles[("Ridge", "Small")]
-
-    # Assert markers or zorders or colors differ so they don't occlude each other invisibly
+    # Assert that their styles are distinct
     assert ls_style != ridge_style
